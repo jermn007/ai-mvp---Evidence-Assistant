@@ -1,0 +1,24 @@
+﻿version: 2
+weights:
+  design_strength: 0.15
+  risk_of_bias_avg: 0.20      # avg of six education bias domains
+  learner_match: 0.10
+  intervention_replicability: 0.10
+  context_match: 0.10
+  validated_measure_used: 0.05
+  kirkpatrick_level: 0.20
+  recency: 0.10
+
+mappings:
+  kirkpatrick_level:
+    L1: 0.25
+    L2a: 0.50
+    L2b: 0.60
+    L3: 0.80
+    L4a: 0.90
+    L4b: 1.00
+risk_of_bias_domains: [underpinning, curriculum, setting, pedagogical, content, conclusion]
+thresholds:
+  green: "score_final >= 0.75"
+  amber: "0.55 <= score_final < 0.75"
+  red:   "score_final < 0.55"

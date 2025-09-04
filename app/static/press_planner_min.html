@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PRESS Planner (LICO → MEDLINE/PubMed)</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #0f172a;
+      --muted: #475569;
+      --line: #e2e8f0;
+      --primary: #0ea5e9;
+      --success: #10b981;
+      --warn: #f59e0b;
+      --danger: #ef4444;
+      --radius: 16px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: linear-gradient(#fff, var(--bg)); color: var(--text); font: 15px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; }
+    .container { max-width: 1100px; margin: 32px auto; padding: 0 16px; }
+    h1 { font-size: 28px; margin: 0 0 16px; }
+    .subtle { color: var(--muted); }
+
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 2px 8px rgba(15,23,42,0.05); }
+    .card-h { padding: 16px 18px; border-bottom: 1px solid var(--line); font-weight: 600; }
+    .card-c { padding: 16px 18px; }
+
+    .grid { display: grid; gap: 12px; }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    @media (max-width: 840px){ .grid-3, .grid-2 { grid-template-columns: 1fr; } }
+
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"], textarea, select { width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: #fff; color: var(--text); }
+    textarea { min-height: 110px; resize: vertical; }
+
+    .row { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+    .btn { appearance: none; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 10px 14px; border-radius: 12px; cursor: pointer; }
+    .btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .btn.ghost { background: transparent; }
+    .btn[disabled] { opacity: .6; cursor: not-allowed; }
+
+    .pill { display:inline-flex; align-items:center; gap:6px; font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: #f1f5f9; color: var(--muted); }
+    .chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; }
+    .chip.pass { background:#ecfdf5; color:#065f46; border:1px solid #a7f3d0; }
+    .chip.suggest { background:#fffbeb; color:#92400e; border:1px solid #fde68a; }
+    .chip.revise { background:#fef2f2; color:#991b1b; border:1px solid #fecaca; }
+
+    .line { border:1px solid var(--line); border-radius: 14px; padding: 10px 12px; background: #fff; }
+    .line .top { display:flex; align-items:center; justify-content: space-between; gap:12px; }
+    .n { display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:999px; background:#f1f5f9; border:1px solid var(--line); font-weight:600; }
+    .type { font-size: 13px; color: var(--muted); margin-left: 8px; }
+
+    .muted { color: var(--muted); }
+    .err { color: var(--danger); font-size: 13px; }
+    .ok { color: var(--success); font-size: 13px; }
+
+    .footer { margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>PRESS Planner <span class="subtle">(LICO → MEDLINE/PubMed)</span></h1>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-h">Configuration</div>
+      <div class="card-c grid">
+        <div class="grid grid-3">
+          <div>
+            <label>API Base URL</label>
+            <input id="apiBase" type="text" value="http://127.0.0.1:8000" />
+          </div>
+          <div>
+            <label>Mode</label>
+            <select id="mode">
+              <option value="lico">LICO → Plan</option>
+              <option value="run">Use Run ID</option>
+            </select>
+          </div>
+          <div class="row" style="margin-top: 24px">
+            <input id="hits" type="checkbox" checked />
+            <label for="hits">Compute counts (PubMed)</label>
+          </div>
+        </div>
+
+        <div id="licoSection" class="grid grid-3">
+          <div>
+            <label>Learner</label>
+            <input id="learner" type="text" placeholder="e.g., prelicensure nursing students" />
+          </div>
+          <div>
+            <label>Intervention</label>
+            <input id="intervention" type="text" placeholder="e.g., simulation-based active learning" />
+          </div>
+          <div>
+            <label>Context</label>
+            <input id="context" type="text" placeholder="e.g., university / clinical placements" />
+          </div>
+          <div>
+            <label>Outcome</label>
+            <input id="outcome" type="text" placeholder="e.g., skills, attitudes, patient outcomes" />
+          </div>
+          <div>
+            <label>Database</label>
+            <select id="dbName">
+              <option value="MEDLINE" selected>MEDLINE</option>
+            </select>
+          </div>
+          <div>
+            <label>Interface</label>
+            <select id="iface">
+              <option value="PubMed" selected>PubMed</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="runSection" class="grid grid-3" style="display:none">
+          <div class="grid" style="grid-column: span 2">
+            <label>Run ID</label>
+            <input id="runId" type="text" placeholder="e.g., 9ddc9679-f6fc-..." />
+          </div>
+          <div></div>
+          <div>
+            <label>Database</label>
+            <select id="dbNameRun">
+              <option value="MEDLINE" selected>MEDLINE</option>
+            </select>
+          </div>
+          <div>
+            <label>Interface</label>
+            <select id="ifaceRun">
+              <option value="PubMed" selected>PubMed</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <button id="build" class="btn primary">Build PRESS plan</button>
+          <button id="download" class="btn" disabled>Download JSON</button>
+          <span id="status" class="muted"></span>
+        </div>
+        <div id="error" class="err"></div>
+      </div>
+    </div>
+
+    <div id="results" class="grid" style="display:none">
+      <div class="card">
+        <div class="card-h" id="dbHeader">MEDLINE / PubMed</div>
+        <div class="card-c">
+          <div id="lines" class="grid" style="gap:10px"></div>
+
+          <div class="footer">
+            <label>Combined query</label>
+            <textarea id="combined" readonly></textarea>
+            <div class="row" style="margin-top: 8px">
+              <button id="copyCombined" class="btn">Copy combined</button>
+              <span id="copyMsg" class="muted"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-h">Checklist</div>
+        <div class="card-c grid">
+          <div class="grid grid-2">
+            <div id="c_translation" class="pill">Translation: —</div>
+            <div id="c_headings" class="pill">Subject headings: —</div>
+            <div id="c_text" class="pill">Text words: —</div>
+            <div id="c_syntax" class="pill">Spelling / syntax / lines: —</div>
+            <div id="c_limits" class="pill">Limits & filters: —</div>
+          </div>
+          <div class="muted" id="c_notes"></div>
+          <div class="grid">
+            <label>Question (LICO)</label>
+            <div id="licoOut" class="muted"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const qs = (sel) => document.querySelector(sel);
+    const qsa = (sel) => Array.from(document.querySelectorAll(sel));
+
+    const apiBase = qs('#apiBase');
+    const mode = qs('#mode');
+    const hits = qs('#hits');
+    const licoSection = qs('#licoSection');
+    const runSection = qs('#runSection');
+    const learner = qs('#learner');
+    const intervention = qs('#intervention');
+    const context = qs('#context');
+    const outcome = qs('#outcome');
+    const dbName = qs('#dbName');
+    const iface = qs('#iface');
+    const runId = qs('#runId');
+    const dbNameRun = qs('#dbNameRun');
+    const ifaceRun = qs('#ifaceRun');
+
+    const buildBtn = qs('#build');
+    const downloadBtn = qs('#download');
+    const status = qs('#status');
+    const errorBox = qs('#error');
+
+    const results = qs('#results');
+    const dbHeader = qs('#dbHeader');
+    const linesBox = qs('#lines');
+    const combined = qs('#combined');
+    const copyCombined = qs('#copyCombined');
+    const copyMsg = qs('#copyMsg');
+
+    const c_translation = qs('#c_translation');
+    const c_headings = qs('#c_headings');
+    const c_text = qs('#c_text');
+    const c_syntax = qs('#c_syntax');
+    const c_limits = qs('#c_limits');
+    const c_notes = qs('#c_notes');
+    const licoOut = qs('#licoOut');
+
+    let lastPlan = null;
+
+    mode.addEventListener('change', () => {
+      const m = mode.value;
+      licoSection.style.display = m === 'lico' ? '' : 'none';
+      runSection.style.display = m === 'run' ? '' : 'none';
+    });
+
+    copyCombined.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(combined.value); copyMsg.textContent = 'Copied!'; }
+      catch { copyMsg.textContent = 'Copy failed'; }
+      setTimeout(()=> copyMsg.textContent='', 1200);
+    });
+
+    downloadBtn.addEventListener('click', () => {
+      if (!lastPlan) return;
+      const blob = new Blob([JSON.stringify(lastPlan, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'press-plan.json'; a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    function chip(el, label, value){
+      el.textContent = `${label}: ${value || '—'}`;
+      el.classList.remove('pass','suggest','revise');
+      if (value) el.classList.add(value);
+      el.classList.add('chip');
+    }
+
+    function buildCombinedQuery(lines) {
+      const map = new Map(lines.map(l => [l.n, l.text]));
+      const combine = lines.find(l => l.type === 'Combine');
+      const limits = lines.find(l => l.type === 'Limits');
+      const expand = (expr) => expr.replace(/\b(\d+)\b/g, (_, g1) => `(${map.get(Number(g1)) || ''})`);
+      let q = '';
+      if (combine) q = expand(combine.text);
+      else q = lines.filter(l => l.type !== 'Combine' && l.type !== 'Limits').sort((a,b)=>a.n-b.n).map(l=>`(${l.text})`).join(' AND ');
+      if (limits && limits.text) q = `(${q}) AND (${limits.text})`;
+      return q;
+    }
+
+    function renderPlan(plan){
+      lastPlan = plan;
+      downloadBtn.disabled = false;
+      const strategies = plan.strategies || {};
+      const dbKey = Object.keys(strategies)[0];
+      const strat = strategies[dbKey];
+      dbHeader.textContent = `${strat.database} / ${strat.interface}`;
+
+      // lines
+      linesBox.innerHTML = '';
+      (strat.lines || []).forEach(l => {
+        const div = document.createElement('div');
+        div.className = 'line';
+        const hitsFrag = (typeof l.hits === 'number') ? `<span class="pill">${l.hits.toLocaleString()} hits</span>` : '';
+        div.innerHTML = `
+          <div class="top">
+            <div class="row" style="gap:8px">
+              <span class="n">${l.n}</span>
+              <span class="type">${l.type}</span>
+            </div>
+            <div class="row" style="gap:8px">
+              ${hitsFrag}
+              <button class="btn ghost copy">Copy</button>
+            </div>
+          </div>
+          <div style="margin-top:6px; font-size:14px">${l.text}</div>
+        `;
+        div.querySelector('.copy').addEventListener('click', async () => {
+          try { await navigator.clipboard.writeText(l.text); }
+          catch {}
+        });
+        linesBox.appendChild(div);
+      });
+
+      // combined
+      combined.value = buildCombinedQuery(strat.lines || []);
+
+      // checklist
+      const checklist = plan.checklist && plan.checklist[dbKey];
+      if (checklist){
+        chip(c_translation, 'Translation', checklist.translation);
+        chip(c_headings, 'Subject headings', checklist.subject_headings);
+        chip(c_text, 'Text words', checklist.text_words);
+        chip(c_syntax, 'Spelling / syntax / lines', checklist.spelling_syntax_lines);
+        chip(c_limits, 'Limits & filters', checklist.limits_filters);
+        c_notes.textContent = checklist.notes || '';
+      }
+
+      // lico
+      const q = plan.question_lico || {};
+      licoOut.textContent = `L: ${q.learner || '—'} | I: ${q.intervention || '—'} | C: ${q.context || '—'} | O: ${q.outcome || '—'}`;
+
+      results.style.display = '';
+    }
+
+    async function postPlan(base, lico, dbs, withHits){
+      const path = withHits ? '/press/plan/hits' : '/press/plan';
+      const res = await fetch(base + path, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ lico, databases: dbs })});
+      if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
+      return await res.json();
+    }
+
+    async function getPlanForRun(base, runId, withHits){
+      const path = withHits ? `/runs/${encodeURIComponent(runId)}/press.plan.hits.json` : `/runs/${encodeURIComponent(runId)}/press.plan.json`;
+      const res = await fetch(base + path);
+      if (!res.ok) throw new Error(`GET ${path} failed: ${res.status}`);
+      return await res.json();
+    }
+
+    buildBtn.addEventListener('click', async () => {
+      errorBox.textContent = '';
+      status.textContent = 'Working...';
+      buildBtn.disabled = true;
+      downloadBtn.disabled = true;
+      results.style.display = 'none';
+      try {
+        const base = apiBase.value.trim().replace(/\/$/, '');
+        let plan;
+        if (mode.value === 'lico'){
+          const licoObj = { learner: learner.value, intervention: intervention.value, context: context.value, outcome: outcome.value };
+          const dbs = dbName.value ? [{ name: dbName.value, interface: iface.value }] : [];
+          plan = await postPlan(base, licoObj, dbs, hits.checked);
+        } else {
+          if (!runId.value.trim()) throw new Error('Please enter a run ID');
+          plan = await getPlanForRun(base, runId.value.trim(), hits.checked);
+        }
+        renderPlan(plan);
+        status.textContent = 'Done';
+      } catch (e){
+        console.error(e);
+        errorBox.textContent = e.message || String(e);
+        status.textContent = '';
+      } finally {
+        buildBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

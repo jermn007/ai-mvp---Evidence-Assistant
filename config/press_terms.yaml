@@ -1,0 +1,48 @@
+# Minimal seed terms. You can expand these safely over time.
+learner:
+  mesh:
+    - "Students, Health Occupations"
+    - "Education, Medical"
+    - "Education, Nursing"
+  text:
+    - "medical student*"
+    - "nursing student*"
+    - "allied health student*"
+    - resident*
+    - trainee*
+intervention:
+  mesh:
+    - "Education, Interprofessional"
+    - "Education, Professional"
+    - "Teaching"
+  text:
+    - "interprofessional education"
+    - "simulation-based"
+    - "active learning"
+    - "team-based learning"
+    - "problem-based learning"
+context:
+  mesh:
+    - "Schools, Medical"
+    - "Schools, Nursing"
+    - "Clinical Clerkship"
+  text:
+    - universit*
+    - college*
+    - prelicen*
+    - "clinical placement"
+    - classroom*
+outcome:
+  mesh:
+    - "Education Measurement"
+    - "Clinical Competence"
+  text:
+    - attitude*
+    - knowledge
+    - skill*
+    - behavior*
+    - "patient outcome*"
+limits:
+  language: English
+  humans: true
+  year_min: 2015

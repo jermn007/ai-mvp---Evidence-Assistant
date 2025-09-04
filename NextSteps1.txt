@@ -1,0 +1,35 @@
+Next steps (prioritized)
+
+Durable checkpoints (PostgresSaver)
+
+Add DATABASE_URL=postgresql+psycopg2://… to .env, pip install psycopg2-binary, restart.
+
+You’ll keep seen_external_ids across server restarts.
+
+Source coverage
+
+Add ERIC and arXiv connectors; integrate into harvest(); keep dedupe.
+
+Optional: retries/rate-limit handling; backoff.
+
+Better screening + PRISMA
+
+Expand dedupe_screen() to apply inclusion/exclusion criteria (population, setting, study design).
+
+Aggregate exclusion reasons in /prisma/{run_id} and CSV export.
+
+R/A/G calibration workflow
+
+Create a gold set; run Streamlit to compare rubric output vs gold; tweak rubric.yaml weights/thresholds.
+
+(Optional) add LLM-assisted design/bias scoring with transparent rationales.
+
+Observability
+
+Turn on LangSmith (LANGSMITH_API_KEY, LANGCHAIN_TRACING_V2=true, LANGSMITH_PROJECT=ai-mvp-dev) to trace each node I/O.
+
+Exports & UI
+
+/records/{run_id} endpoint and CSV export that includes ratings + reasons.
+
+Small Streamlit dashboard to browse runs/records.
