@@ -6,9 +6,11 @@ from uuid import uuid4
 import asyncio
 import io
 import csv
+import re
 from collections import Counter, defaultdict
 from typing import Sequence, List, Optional
 import importlib
+from types import SimpleNamespace as _NS
 
 from fastapi import FastAPI, HTTPException, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,9 +36,8 @@ from app.sources import (
 from app.graph.build import get_graph, CHECKPOINTER
 from app.persist import persist_run
 
-# PRESS contract / planner
+# PRESS contract / planner types + hits helper
 from app.press_contract import LICO, DatabaseSpec, PressPlanResponse
-from app.press import plan_press_from_lico
 from app.press_hits import fill_hits_for_pubmed
 
 # --- DB compatibility layer (works with async or sync app.db) -----------------
@@ -397,7 +398,150 @@ async def export_appraisals_page(
     }
 
 
-# ======================= PRESS planner endpoints =======================
+# ======================= PRESS planner (LICO-aware) =======================
+
+def _split_terms(s: str) -> list[str]:
+    """Split free text into candidate terms; keep the full phrase too if multiword."""
+    if not s:
+        return []
+    s = s.strip()
+    out = set()
+    parts = re.split(r"[;,/]|(?i:\band\b)|(?i:\bor\b)", s)
+    for p in parts:
+        p = p.strip()
+        if p:
+            out.add(p)
+    if " " in s:
+        out.add(s)
+    return [t for t in sorted(out, key=len, reverse=True)]
+
+def _tiab_expr(terms: list[str]) -> str:
+    """
+    Turn terms into PubMed [tiab] expressions.
+    - Multiword terms are quoted: "foo bar"[tiab]
+    - Single words get * wildcard if alnum and 4+ chars and not already wildcarded
+    """
+    out = []
+    for t in terms:
+        qt = t.strip().strip('"')
+        if not qt:
+            continue
+        if " " in qt:
+            out.append(f"\"{qt}\"[tiab]")
+        else:
+            if re.fullmatch(r"[A-Za-z0-9\\-]+", qt) and len(qt) >= 4 and not qt.endswith("*"):
+                out.append(f"{qt}*[tiab]")
+            else:
+                out.append(f"{qt}[tiab]")
+    return " OR ".join(out) if out else ""
+
+def _press_strategy_medline(lico: LICO, db_name: str = "MEDLINE", interface: str = "PubMed") -> dict:
+    """Build MEDLINE/PubMed strategy with stable MeSH + custom LICO text-words."""
+    L = (lico.learner or "").strip()
+    I = (lico.intervention or "").strip()
+    C = (lico.context or "").strip()
+    O = (lico.outcome or "").strip()
+
+    # MeSH + canonical text words (scaffold)
+    LEARNER_MESH = "\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh]"
+    LEARNER_TXT  = "medical student*[tiab] OR nursing student*[tiab] OR allied health student*[tiab] OR resident*[tiab] OR trainee*[tiab]"
+
+    INTERV_MESH  = "\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh]"
+    INTERV_TXT   = "interprofessional education[tiab] OR simulation-based*[tiab] OR active learning[tiab] OR team-based learning[tiab] OR problem-based learning[tiab]"
+
+    CONTEXT_MESH = "\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh]"
+    CONTEXT_TXT  = "universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR clinical placement[tiab] OR classroom*[tiab]"
+
+    OUTCOME_MESH = "\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh]"
+    OUTCOME_TXT  = "attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR patient outcome*[tiab]"
+
+    # Custom text-words from LICO
+    L_txt = _tiab_expr(_split_terms(L))
+    I_txt = _tiab_expr(_split_terms(I))
+    C_txt = _tiab_expr(_split_terms(C))
+    O_txt = _tiab_expr(_split_terms(O))
+
+    def _merge(stock_mesh: str, stock_txt: str, custom_txt: str) -> str:
+        if custom_txt:
+            return f"({stock_mesh} OR {stock_txt} OR {custom_txt})"
+        return f"({stock_mesh} OR {stock_txt})"
+
+    line1 = _merge(LEARNER_MESH, LEARNER_TXT, L_txt)
+    line2 = _merge(INTERV_MESH, INTERV_TXT, I_txt)
+    line3 = _merge(CONTEXT_MESH, CONTEXT_TXT, C_txt)
+    line4 = _merge(OUTCOME_MESH, OUTCOME_TXT, O_txt)
+
+    lines = [
+        {"n": 1, "type": "Learner",      "text": line1, "hits": None},
+        {"n": 2, "type": "Intervention", "text": line2, "hits": None},
+        {"n": 3, "type": "Context",      "text": line3, "hits": None},
+        {"n": 4, "type": "Outcome",      "text": line4, "hits": None},
+        {"n": 5, "type": "Combine",      "text": "1 AND 2 AND 3 AND 4", "hits": None},
+        {"n": 6, "type": "Limits",       "text": "2015:3000[dp] AND English[la] AND Humans[Mesh]", "hits": None},
+    ]
+
+    return {
+        "database": db_name,
+        "interface": interface,
+        "lines": lines,
+    }
+
+def plan_press_from_lico(lico: LICO, databases: Optional[List[DatabaseSpec]] = None) -> dict:
+    """Return a PRESS-compatible plan dict (question_lico + strategies + checklist)."""
+    dbs = databases or [DatabaseSpec(name="MEDLINE", interface="PubMed")]
+    db = dbs[0]
+    strat = _press_strategy_medline(lico, db_name=db.name or "MEDLINE", interface=db.interface or "PubMed")
+
+    has_custom = any([(lico.learner or "").strip(), (lico.intervention or "").strip(), (lico.context or "").strip(), (lico.outcome or "").strip()])
+    checklist = {
+        "translation": "pass",
+        "subject_headings": "pass",
+        "text_words": "pass" if has_custom else "suggest",
+        "spelling_syntax_lines": "pass",
+        "limits_filters": "pass",
+        "notes": "Auto-checks are heuristic; librarian review recommended.",
+    }
+
+    return {
+        "question_lico": {
+            "learner": (lico.learner or None),
+            "intervention": (lico.intervention or None),
+            "context": (lico.context or None),
+            "outcome": (lico.outcome or None),
+        },
+        "strategies": {
+            "MEDLINE": strat
+        },
+        "checklist": {
+            "MEDLINE": checklist
+        }
+    }
+
+# --- Small adapters so fill_hits_for_pubmed can accept our dict strategy ------
+
+def _strategy_dict_to_ns(strategy: dict) -> _NS:
+    """Convert our dict strategy to an object with .database/.interface/.lines attrs."""
+    lines = [ _NS(**ln) for ln in strategy.get("lines", []) ]
+    return _NS(database=strategy.get("database"),
+               interface=strategy.get("interface"),
+               lines=lines)
+
+def _strategy_ns_to_dict(ns: _NS) -> dict:
+    return {
+        "database": getattr(ns, "database", None),
+        "interface": getattr(ns, "interface", None),
+        "lines": [
+            {
+                "n": getattr(ln, "n", None),
+                "type": getattr(ln, "type", None),
+                "text": getattr(ln, "text", None),
+                "hits": getattr(ln, "hits", None),
+            }
+            for ln in getattr(ns, "lines", []) or []
+        ],
+    }
+
+# ----------------------- PRESS planner endpoints ------------------------------
 
 class PressPlanBody(BaseModel):
     lico: LICO
@@ -466,8 +610,11 @@ async def press_plan_for_run(
 async def make_press_plan_with_hits(body: PressPlanBody):
     plan = plan_press_from_lico(body.lico, body.databases)
     # fill for MEDLINE/PubMed only
-    if "MEDLINE" in plan.strategies:
-        plan.strategies["MEDLINE"] = await fill_hits_for_pubmed(plan.strategies["MEDLINE"])
+    strat = plan.get("strategies", {}).get("MEDLINE")
+    if strat:
+        ns = _strategy_dict_to_ns(strat)
+        ns = await fill_hits_for_pubmed(ns)  # expects attrs
+        plan["strategies"]["MEDLINE"] = _strategy_ns_to_dict(ns)
     return plan
 
 @app.get("/runs/{run_id}/press.plan.hits.json", response_model=PressPlanResponse)
@@ -482,6 +629,9 @@ async def press_plan_for_run_with_hits(
 ):
     # Reuse GET plan builder
     base = await press_plan_for_run(run_id, learner, intervention, context, outcome, db_name, interface)
-    if db_name == "MEDLINE" and interface.lower() == "pubmed":
-        base.strategies["MEDLINE"] = await fill_hits_for_pubmed(base.strategies["MEDLINE"])
+    strat = base.get("strategies", {}).get("MEDLINE")
+    if strat and db_name == "MEDLINE" and (interface or "PubMed").lower() == "pubmed":
+        ns = _strategy_dict_to_ns(strat)
+        ns = await fill_hits_for_pubmed(ns)
+        base["strategies"]["MEDLINE"] = _strategy_ns_to_dict(ns)
     return base
