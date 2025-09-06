@@ -1,0 +1,34 @@
+id: clinical
+name: Clinical Trials / Digital Health
+description: PRESS scaffold for clinical evidence queries with digital interventions.
+facets:
+  - name: Condition
+    mesh: []
+    text_words: []
+  - name: Intervention
+    mesh: []
+    text_words:
+      - eHealth
+      - mHealth
+      - mobile app*
+      - digital health
+      - telehealth
+  - name: StudyDesign
+    mesh: []
+    text_words:
+      - randomized controlled trial
+      - clinical trial*
+      - pilot trial
+      - pragmatic trial
+  - name: Outcome
+    mesh: []
+    text_words:
+      - behavior change
+      - adherence
+      - self-management
+      - quality of life
+limits:
+  years_default: "2015-"
+  language_default: English
+  humans_default: true
+

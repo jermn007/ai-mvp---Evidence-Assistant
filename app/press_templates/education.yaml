@@ -1,0 +1,52 @@
+id: education
+name: Health Professions Education
+description: PRESS scaffold for health professions education evidence searches.
+facets:
+  - name: Learner
+    mesh:
+      - "Students, Health Occupations"
+      - "Education, Medical"
+      - "Education, Nursing"
+    text_words:
+      - medical student*
+      - nursing student*
+      - allied health student*
+      - resident*
+      - trainee*
+  - name: Intervention
+    mesh:
+      - "Education, Interprofessional"
+      - "Education, Professional"
+      - "Teaching"
+    text_words:
+      - interprofessional education
+      - simulation-based*
+      - active learning
+      - team-based learning
+      - problem-based learning
+  - name: Context
+    mesh:
+      - "Schools, Medical"
+      - "Schools, Nursing"
+      - "Clinical Clerkship"
+    text_words:
+      - universit*
+      - college*
+      - prelicen*
+      - clinical placement
+      - classroom*
+  - name: Outcome
+    mesh:
+      - "Education Measurement"
+      - "Clinical Competence"
+    text_words:
+      - attitude*
+      - knowledge*
+      - skill*
+      - behavior*
+      - patient outcome*
+limits:
+  years_default: "2015-"
+  language_default: English
+  humans_default: true
+

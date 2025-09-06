@@ -34,13 +34,16 @@ def plan_press(state):
     state["timings"] = state.get("timings") or {}
     state["source_counts"] = state.get("source_counts") or {}
 
+    # If a PRESS plan is already provided (e.g., via LICO run), keep it; otherwise create a default
     q = (state.get("query") or "instructional design evidence synthesis").strip()
-    state["press"] = PressPlan(
-        concepts=[q],
-        boolean=f'("{q}"[Title/Abstract]) AND (study OR trial OR evaluation)',
-        sources=["PubMed", "Crossref"],
-        years="2019-",
-    )
+    if not state.get("press"):
+        year_min = os.getenv("PRESS_YEAR_MIN", "2019-")
+        state["press"] = PressPlan(
+            concepts=[q],
+            boolean=f'("{q}"[Title/Abstract]) AND (study OR trial OR evaluation)',
+            sources=["PubMed", "Crossref", "ERIC", "SemanticScholar", "GoogleScholar", "arXiv"],
+            years=year_min,
+        )
 
     state["timings"]["plan_press"] = round(time.perf_counter() - t0, 6)
     logger.info("plan_press: query='%s'", q)
@@ -77,16 +80,30 @@ def harvest(state):
         except Exception:
             pass
 
+    # Respect configured sources from PRESS plan if provided
+    wanted = set()
+    try:
+        press = state.get("press")
+        if press and getattr(press, "sources", None):
+            wanted = set([s.strip() for s in press.sources or []])
+    except Exception:
+        wanted = set()
+
+    # Map source name -> coroutine to fetch
+    coros = []
+    def add(name, coro):
+        if not wanted or name in wanted:
+            coros.append(coro)
+
+    add("PubMed", pubmed_search_async(q, max_n=25))
+    add("Crossref", crossref_search_async(q, max_n=25, mailto=mailto))
+    add("arXiv", arxiv_search_async(q, max_n=25))
+    add("ERIC", eric_search_async(q, max_n=25))
+    add("SemanticScholar", s2_search_async(q, max_n=25))
+    add("GoogleScholar", scholar_serpapi_async(q, max_n=25, year_min=year_min))  # pass year floor
+
     async def gather():
-        return await asyncio.gather(
-            pubmed_search_async(q, max_n=25),
-            crossref_search_async(q, max_n=25, mailto=mailto),
-            arxiv_search_async(q, max_n=25),
-            eric_search_async(q, max_n=25),
-            s2_search_async(q, max_n=25),
-            scholar_serpapi_async(q, max_n=25, year_min=year_min),  # <-- pass year floor
-            return_exceptions=True,
-        )
+        return await asyncio.gather(*coros, return_exceptions=True)
 
     res = asyncio.run(gather())
 
@@ -180,7 +197,7 @@ def appraise(state):
         apps.append(AppraisalModel(
             record_id=r.record_id,
             rating=rating,
-            scores={k: float(v) for k, v in scores.items() if k != "final"},
+            scores={k: float(v) for k, v in scores.items()},
             rationale=f"Weighted scores → final={scores['final']:.2f} via rubric.yaml",
             citations=[r.url or ""],
         ))

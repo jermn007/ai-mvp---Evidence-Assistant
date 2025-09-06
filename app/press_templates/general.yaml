@@ -1,0 +1,21 @@
+id: general
+name: General Research
+description: Minimal PRESS scaffold; relies primarily on user LICO terms.
+facets:
+  - name: Learner
+    mesh: []
+    text_words: []
+  - name: Intervention
+    mesh: []
+    text_words: []
+  - name: Context
+    mesh: []
+    text_words: []
+  - name: Outcome
+    mesh: []
+    text_words: []
+limits:
+  years_default: "2019-"
+  language_default: English
+  humans_default: false
+

@@ -52,14 +52,14 @@ def _merge_headers(extra: Dict[str, str] | None) -> Dict[str, str]:
 @_retry
 async def _get(client: httpx.AsyncClient, url: str, *, params: Dict[str, Any] | None = None,
                headers: Dict[str, str] | None = None) -> httpx.Response:
-    resp = await client.get(url, params=params, headers=headers)
+    resp = await client.get(url, params=params, headers=headers, follow_redirects=True)
     resp.raise_for_status()
     return resp
 
 @_retry
 async def _get_json(client: httpx.AsyncClient, url: str, *, params: Dict[str, Any] | None = None,
                     headers: Dict[str, str] | None = None) -> Any:
-    resp = await client.get(url, params=params, headers=headers)
+    resp = await client.get(url, params=params, headers=headers, follow_redirects=True)
     resp.raise_for_status()
     return resp.json()
 
@@ -159,9 +159,9 @@ async def crossref_search_async(term: str, max_n: int = 25, mailto: Optional[str
 async def arxiv_search_async(query: str, max_n: int = 25) -> List[Dict[str, Any]]:
     """
     Query arXiv Atom API and normalize to our RecordModel shape.
-    Docs: http://export.arxiv.org/api_help/
+    Docs: https://export.arxiv.org/api_help/ (use HTTPS to avoid 301 redirects)
     """
-    url = "http://export.arxiv.org/api/query"
+    url = "https://export.arxiv.org/api/query"
     params = {
         "search_query": f"all:{query}",
         "start": 0,
@@ -374,6 +374,6 @@ async def scholar_serpapi_async(query: str, max_n: int = 25, year_min: int | Non
             "year": year,
             "doi": None,
             "url": link,
-            "source": "Scholar",
+            "source": "GoogleScholar",
         })
     return out

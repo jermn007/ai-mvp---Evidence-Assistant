@@ -35,10 +35,11 @@ from app.sources import (
 )
 from app.graph.build import get_graph, CHECKPOINTER
 from app.persist import persist_run
+from app.models import PressPlan
 
 # PRESS contract / planner types + hits helper
-from app.press_contract import LICO, DatabaseSpec, PressPlanResponse
-from app.press_hits import fill_hits_for_pubmed
+from app.press_contract import LICO, DatabaseSpec, PressPlanResponse, PressStrategy, StrategyLine
+from app.press_hits import fill_hits_for_pubmed, _expand_lines_to_queries
 
 # --- DB compatibility layer (works with async or sync app.db) -----------------
 _db = importlib.import_module("app.db")
@@ -46,6 +47,8 @@ _db = importlib.import_module("app.db")
 # Models (must exist)
 Record = getattr(_db, "Record")
 Appraisal = getattr(_db, "Appraisal")
+Screening = getattr(_db, "Screening", None)
+PrismaCounts = getattr(_db, "PrismaCounts", None)
 
 def _has(name: str) -> bool:
     return hasattr(_db, name) and callable(getattr(_db, name))
@@ -99,6 +102,30 @@ async def _count_stmt(stmt):
     raise RuntimeError("No usable session factory in app.db.")
 # -----------------------------------------------------------------------------
 
+async def _select_mappings(stmt):
+    """Execute a select and return list of mapping dicts (column aliases -> values)."""
+    if _has("async_session"):
+        async with _db.async_session() as s:
+            res = await s.execute(stmt)
+            return res.mappings().all()
+    if _has("AsyncSessionLocal"):
+        async with _db.AsyncSessionLocal() as s:
+            res = await s.execute(stmt)
+            return res.mappings().all()
+    if _has("SessionLocal"):
+        def _run():
+            with _db.SessionLocal() as s:
+                res = s.execute(stmt)
+                return res.mappings().all()
+        return await asyncio.to_thread(_run)
+    if _has("session"):
+        def _run():
+            with _db.session() as s:
+                res = s.execute(stmt)
+                return res.mappings().all()
+        return await asyncio.to_thread(_run)
+    raise RuntimeError("No usable session factory in app.db.")
+
 
 app = FastAPI(title="Evidence Assistant (MVP)")
 
@@ -114,7 +141,10 @@ GRAPH = get_graph()
 
 
 class RunRequest(BaseModel):
-    query: str
+    query: str | None = None
+    lico: LICO | None = None
+    years: str | None = None                 # e.g., "2019-"
+    sources: List[str] | None = None         # e.g., ["PubMed","ERIC",...]
     thread_id: str | None = None
 
 
@@ -137,10 +167,28 @@ def health_checkpointer():
 def run(req: RunRequest):
     try:
         tid = req.thread_id or str(uuid4())
-        final = GRAPH.invoke(
-            {"query": req.query},
-            config={"configurable": {"thread_id": tid}},
-        )
+        # Build initial state: support either free-text query or LICO-driven query
+        init_state: dict = {}
+
+        # Decide query string to feed connectors
+        if req.lico is not None:
+            l = req.lico
+            q_exec = " ".join([s for s in [l.learner, l.intervention, l.context, l.outcome] if s])
+            init_state["query"] = q_exec
+
+            # Construct a simple PRESS plan to carry along
+            years = req.years or os.getenv("PRESS_YEAR_MIN", "2019-")
+            srcs = req.sources or ["PubMed", "Crossref", "ERIC", "SemanticScholar", "GoogleScholar", "arXiv"]
+            boolean = " AND ".join([f'("{s}")' for s in [l.learner, l.intervention, l.context, l.outcome] if s]) or q_exec
+            init_state["press"] = PressPlan(concepts=[c for c in [l.learner, l.intervention, l.context, l.outcome] if c],
+                                             boolean=boolean,
+                                             sources=srcs,
+                                             years=years)
+        else:
+            # Fallback to free-text query
+            init_state["query"] = (req.query or "").strip()
+
+        final = GRAPH.invoke(init_state, config={"configurable": {"thread_id": tid}})
         run_id = persist_run(final)
         prisma = final["prisma"].model_dump() if hasattr(final.get("prisma"), "model_dump") else final.get("prisma", {})
         ratings = [a.rating for a in final.get("appraisals", [])]
@@ -154,6 +202,124 @@ def run(req: RunRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"run failed: {type(e).__name__}: {e}")
+
+
+# ======================= Run from PRESS plan =======================
+
+class RunWithPressBody(BaseModel):
+    plan: PressPlanResponse
+    sources: Optional[List[str]] = None
+    thread_id: Optional[str] = None
+
+def _pubmed_query_from_strategy(strat: PressStrategy | dict) -> tuple[str, Optional[str]]:
+    """Return (final_query, years_from_limits_or_none) from a MEDLINE/PubMed strategy.
+    Uses Combine + Limits expansion via _expand_lines_to_queries.
+    """
+    # Accept dict or PressStrategy
+    if isinstance(strat, dict):
+        ns = _strategy_dict_to_ns(strat)
+    else:
+        # Convert pydantic model to our NS for reuse
+        ns = _NS(database=strat.database, interface=strat.interface, lines=[_NS(**ln.model_dump()) for ln in strat.lines])
+    qmap = _expand_lines_to_queries(ns.lines)  # type: ignore[arg-type]
+    lines = getattr(ns, "lines", []) or []
+    # Prefer Limits line, else last Combine, else highest line number
+    last_n = None
+    years = None
+    for ln in lines:
+        if getattr(ln, "type", None) == "Limits":
+            last_n = getattr(ln, "n", None)
+            # Try to parse years like 2015:3000[dp]
+            txt = getattr(ln, "text", "") or ""
+            m = re.search(r"(19|20)\d{2}\s*:\s*(?:3000|\d{4})", txt)
+            if m:
+                years = f"{m.group(0)[:4]}-"
+            break
+    if last_n is None:
+        # Look for Combine
+        combines = [getattr(ln, "n", None) for ln in lines if getattr(ln, "type", None) == "Combine"]
+        if combines:
+            last_n = combines[-1]
+    if last_n is None and lines:
+        last_n = getattr(lines[-1], "n", None)
+    q_final = qmap.get(last_n) or qmap.get(max(qmap.keys()) if qmap else None) or ""
+    return q_final, years
+
+def _genericize_query(pubmed_q: str) -> str:
+    """Strip PubMed field tags and keep a textual boolean query suitable for general sources."""
+    q = pubmed_q
+    # Remove square-bracket tags like [tiab], [Mesh], [dp], [la]
+    q = re.sub(r"\[[^\]]+\]", "", q)
+    # Collapse excessive parentheses and whitespace
+    q = re.sub(r"\s+", " ", q)
+    q = re.sub(r"\(\s*\)", "", q)
+    return q.strip()
+
+@app.post("/run/press")
+def run_with_press(body: RunWithPressBody):
+    try:
+        tid = body.thread_id or str(uuid4())
+        plan = body.plan
+        # Pull MEDLINE/PubMed strategy
+        strat = plan.strategies.get("MEDLINE") if isinstance(plan.strategies, dict) else None
+        if strat is None:
+            raise HTTPException(status_code=400, detail="Plan missing MEDLINE strategy")
+
+        pubmed_q, years = _pubmed_query_from_strategy(strat)
+        generic_q = _genericize_query(pubmed_q)
+
+        # Choose sources: override or sensible default
+        srcs = body.sources or ["PubMed", "Crossref", "ERIC", "SemanticScholar", "GoogleScholar", "arXiv"]
+        years_final = years or os.getenv("PRESS_YEAR_MIN", "2019-")
+
+        # Build a simple PressPlan snapshot for state
+        press_snapshot = PressPlan(
+            concepts=[c for c in [plan.question_lico.learner, plan.question_lico.intervention, plan.question_lico.context, plan.question_lico.outcome] if c],
+            boolean=pubmed_q,
+            sources=srcs,
+            years=years_final,
+        )
+
+        init_state = {"query": generic_q, "press": press_snapshot}
+        final = GRAPH.invoke(init_state, config={"configurable": {"thread_id": tid}})
+        run_id = persist_run(final)
+        prisma = final["prisma"].model_dump() if hasattr(final.get("prisma"), "model_dump") else final.get("prisma", {})
+        ratings = [a.rating for a in final.get("appraisals", [])]
+        return {
+            "thread_id": tid,
+            "run_id": run_id,
+            "prisma": prisma,
+            "n_appraised": len(ratings),
+            "ratings": ratings,
+            "query_generic": generic_q,
+            "query_pubmed": pubmed_q,
+            "years": years_final,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"run_with_press failed: {type(e).__name__}: {e}")
+
+
+# ======================= Derive queries from plan (no run) ===================
+
+class PlanQueriesBody(BaseModel):
+    plan: PressPlanResponse
+
+@app.post("/press/plan/queries")
+def plan_queries(body: PlanQueriesBody):
+    try:
+        plan = body.plan
+        strat = plan.strategies.get("MEDLINE") if isinstance(plan.strategies, dict) else None
+        if strat is None:
+            raise HTTPException(status_code=400, detail="Plan missing MEDLINE strategy")
+        pubmed_q, years = _pubmed_query_from_strategy(strat)
+        generic_q = _genericize_query(pubmed_q)
+        return {"query_pubmed": pubmed_q, "query_generic": generic_q, "years": years}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"plan_queries failed: {type(e).__name__}: {e}")
 
 
 @app.get("/sources/test")
@@ -207,6 +373,14 @@ def _rows_to_csv(rows: Sequence[object], cols: list[str]) -> str:
         w.writerow([getattr(r, c, None) for c in cols])
     return buf.getvalue()
 
+def _mappings_to_csv(rows: Sequence[dict], cols: list[str]) -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(cols)
+    for m in rows:
+        w.writerow([m.get(c, None) for c in cols])
+    return buf.getvalue()
+
 def _numeric_like(col):
     pattern = r'^\s*[+-]?((\d+(\.\d+)?)|(\.\d+))\s*$'
     return case(
@@ -257,6 +431,508 @@ async def export_appraisals_csv(run_id: str):
     cols = _pick_columns(rows, COLS_APPRAISAL)
     csv_body = _rows_to_csv(rows, cols)
     return Response(content=csv_body, media_type="text/csv")
+
+# ======================= Joined export: records + appraisals ==================
+
+JOIN_COLS = [
+    "record_id", "title", "abstract", "year", "doi", "url", "source",
+    "rating", "score_final", "rationale", "run_id"
+]
+
+@app.get("/runs/{run_id}/records_with_appraisals.json")
+async def export_records_with_appraisals_json(run_id: str):
+    stmt = SAselect(
+        Record.id.label("record_id"),
+        Record.title,
+        Record.abstract,
+        Record.year,
+        Record.doi,
+        Record.url,
+        case((Record.source == "Scholar", "GoogleScholar"), else_=Record.source).label("source"),
+        Appraisal.rating,
+        Appraisal.score_final,
+        Appraisal.rationale,
+        Record.run_id,
+    ).where(
+        Record.run_id == run_id,
+        Appraisal.run_id == run_id,
+        Appraisal.record_id == Record.id,
+    )
+    rows = await _select_mappings(stmt)
+    return rows
+
+@app.get("/runs/{run_id}/records_with_appraisals.csv")
+async def export_records_with_appraisals_csv(run_id: str):
+    stmt = SAselect(
+        Record.id.label("record_id"),
+        Record.title,
+        Record.abstract,
+        Record.year,
+        Record.doi,
+        Record.url,
+        case((Record.source == "Scholar", "GoogleScholar"), else_=Record.source).label("source"),
+        Appraisal.rating,
+        Appraisal.score_final,
+        Appraisal.rationale,
+        Record.run_id,
+    ).where(
+        Record.run_id == run_id,
+        Appraisal.run_id == run_id,
+        Appraisal.record_id == Record.id,
+    )
+    rows = await _select_mappings(stmt)
+    csv_body = _mappings_to_csv(rows, JOIN_COLS)
+    return Response(content=csv_body, media_type="text/csv")
+
+# ======================= PRISMA summary ======================================
+
+@app.get("/runs/{run_id}/prisma.summary.json")
+async def prisma_summary_json(run_id: str):
+    # Counts
+    counts = None
+    if PrismaCounts is not None:
+        rows = await _select_stmt(SAselect(PrismaCounts).where(PrismaCounts.run_id == run_id))
+        if rows:
+            c = rows[0]
+            counts = {
+                "identified": getattr(c, "identified", 0),
+                "deduped": getattr(c, "deduped", 0),
+                "screened": getattr(c, "screened", 0),
+                "excluded": getattr(c, "excluded", 0),
+                "eligible": getattr(c, "eligible", 0),
+                "included": getattr(c, "included", 0),
+            }
+    if counts is None:
+        counts = {"identified": 0, "deduped": 0, "screened": 0, "excluded": 0, "eligible": 0, "included": 0}
+
+    # Exclusion reasons
+    reasons: dict[str, int] = {}
+    if Screening is not None:
+        reason_stmt = SAselect(
+            Screening.reason.label("reason"),
+            func.count().label("count")
+        ).where(
+            Screening.run_id == run_id,
+            Screening.decision == "exclude",
+        ).group_by(Screening.reason)
+        rows = await _select_mappings(reason_stmt)
+        for m in rows:
+            key = m.get("reason") or "Unspecified"
+            try:
+                reasons[str(key)] = int(m.get("count") or 0)
+            except Exception:
+                reasons[str(key)] = 0
+
+    return {"run_id": run_id, "counts": counts, "exclude_reasons": reasons}
+
+@app.get("/runs/{run_id}/prisma.summary.csv")
+async def prisma_summary_csv(run_id: str):
+    data = await prisma_summary_json(run_id)
+    # Flatten into two CSV sections: counts and reasons
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["metric", "value"])
+    for k in ["identified", "deduped", "screened", "excluded", "eligible", "included"]:
+        w.writerow([k, data["counts"].get(k, 0)])
+    w.writerow([])
+    w.writerow(["reason", "count"])
+    for k, v in sorted(data.get("exclude_reasons", {}).items(), key=lambda kv: (-kv[1], kv[0])):
+        w.writerow([k, v])
+    return Response(content=buf.getvalue(), media_type="text/csv")
+
+# ======================= Joined export: paged + filtered =====================
+
+@app.get("/runs/{run_id}/records_with_appraisals.page.json")
+async def export_records_with_appraisals_page(
+    run_id: str,
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    order_by: str = Query("score_final", description="score_final|year|rating|source|title"),
+    order_dir: str = Query("desc", description="asc|desc"),
+    label_in: Optional[str] = Query(None, description="Comma-separated list: Red,Amber,Green"),
+    label_order: Optional[str] = Query(None, description="Custom order for rating e.g., Green,Amber,Red"),
+    score_min: Optional[float] = Query(None),
+    score_max: Optional[float] = Query(None),
+    year_min: Optional[int] = Query(None),
+    year_max: Optional[int] = Query(None),
+    source_in: Optional[str] = Query(None, description="Comma-separated sources"),
+    q: Optional[str] = Query(None, description="Search in title/abstract"),
+):
+    R = Record
+    A = Appraisal
+
+    stmt = SAselect(
+        R.id.label("record_id"),
+        R.title,
+        R.abstract,
+        R.year,
+        R.doi,
+        R.url,
+        R.source,
+        A.rating,
+        A.score_final,
+        A.rationale,
+        R.run_id,
+    ).where(
+        R.run_id == run_id,
+        A.run_id == run_id,
+        A.record_id == R.id,
+    )
+
+    # Filters
+    if label_in:
+        labs = [s.strip() for s in label_in.split(",") if s.strip()]
+        if labs:
+            stmt = stmt.where(A.rating.in_(labs))
+
+    if score_min is not None:
+        stmt = stmt.where((A.score_final >= score_min) | (A.score_final.is_(None)))
+    if score_max is not None:
+        stmt = stmt.where((A.score_final <= score_max) | (A.score_final.is_(None)))
+
+    if year_min is not None:
+        stmt = stmt.where((R.year >= year_min) | (R.year.is_(None)))
+    if year_max is not None:
+        stmt = stmt.where((R.year <= year_max) | (R.year.is_(None)))
+
+    if source_in:
+        srcs = [s.strip() for s in source_in.split(",") if s.strip()]
+        if srcs:
+            stmt = stmt.where(R.source.in_(srcs))
+
+    if q:
+        ql = f"%{q.lower()}%"
+        stmt = stmt.where(
+            or_(func.lower(R.title).like(ql), func.lower(R.abstract).like(ql))
+        )
+
+    # Ordering
+    order_by = (order_by or "score_final").lower()
+    if order_by == "score_final":
+        order_col = A.score_final
+    elif order_by == "year":
+        order_col = R.year
+    elif order_by == "rating":
+        if label_order:
+            order = [s.strip() for s in label_order.split(",") if s.strip()]
+        else:
+            order = ["Green", "Amber", "Red"]
+        order_col = _label_rank_expr(A.rating, order)
+    elif order_by == "source":
+        order_col = R.source
+    elif order_by == "title":
+        order_col = R.title
+    else:
+        order_col = A.score_final
+
+    # Direction
+    if order_dir.lower() == "desc":
+        try:
+            order_col = order_col.desc().nulls_last()
+        except Exception:
+            order_col = order_col.desc()
+    else:
+        try:
+            order_col = order_col.asc().nulls_last()
+        except Exception:
+            order_col = order_col.asc()
+
+    stmt = stmt.order_by(order_col)
+
+    # Count
+    total = await _count_stmt(stmt)
+    rows = await _select_mappings(stmt.offset(offset).limit(limit))
+    return {"run_id": run_id, "total": total, "limit": limit, "offset": offset, "items": rows}
+
+# ======================= Screenings + Records export ==========================
+
+SCREEN_COLS = [
+    "record_id", "decision", "reason", "title", "year", "source", "doi", "url", "run_id"
+]
+
+@app.get("/runs/{run_id}/screenings_with_records.json")
+async def export_screenings_with_records_json(run_id: str):
+    S = Screening
+    R = Record
+    if S is None:
+        raise HTTPException(status_code=404, detail="Screening model unavailable")
+    stmt = SAselect(
+        S.record_id.label("record_id"),
+        S.decision.label("decision"),
+        S.reason.label("reason"),
+        R.title,
+        R.year,
+        case((R.source == "Scholar", "GoogleScholar"), else_=R.source).label("source"),
+        R.doi,
+        R.url,
+        R.run_id,
+    ).where(
+        S.run_id == run_id,
+        R.run_id == run_id,
+        S.record_id == R.id,
+    )
+    rows = await _select_mappings(stmt)
+    return rows
+
+@app.get("/runs/{run_id}/screenings_with_records.csv")
+async def export_screenings_with_records_csv(run_id: str):
+    S = Screening
+    R = Record
+    if S is None:
+        raise HTTPException(status_code=404, detail="Screening model unavailable")
+    stmt = SAselect(
+        S.record_id.label("record_id"),
+        S.decision.label("decision"),
+        S.reason.label("reason"),
+        R.title,
+        R.year,
+        case((R.source == "Scholar", "GoogleScholar"), else_=R.source).label("source"),
+        R.doi,
+        R.url,
+        R.run_id,
+    ).where(
+        S.run_id == run_id,
+        R.run_id == run_id,
+        S.record_id == R.id,
+    )
+    rows = await _select_mappings(stmt)
+    csv_body = _mappings_to_csv(rows, SCREEN_COLS)
+    return Response(content=csv_body, media_type="text/csv")
+
+@app.get("/runs/{run_id}/screenings_with_records.page.json")
+async def export_screenings_with_records_page(
+    run_id: str,
+    limit: int = Query(20, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    decision: Optional[str] = Query(None, description="include|exclude"),
+    reason_in: Optional[str] = Query(None, description="Comma-separated reasons"),
+    source_in: Optional[str] = Query(None, description="Comma-separated sources"),
+    year_min: Optional[int] = Query(None),
+    year_max: Optional[int] = Query(None),
+    q: Optional[str] = Query(None, description="Search in title/abstract"),
+    order_by: str = Query("year", description="year|source|reason|title"),
+    order_dir: str = Query("desc", description="asc|desc"),
+):
+    S = Screening
+    R = Record
+    if S is None:
+        raise HTTPException(status_code=404, detail="Screening model unavailable")
+
+    stmt = SAselect(
+        S.record_id.label("record_id"),
+        S.decision.label("decision"),
+        S.reason.label("reason"),
+        R.title,
+        R.year,
+        case((R.source == "Scholar", "GoogleScholar"), else_=R.source).label("source"),
+        R.doi,
+        R.url,
+        R.run_id,
+    ).where(
+        S.run_id == run_id,
+        R.run_id == run_id,
+        S.record_id == R.id,
+    )
+
+    if decision in ("include", "exclude"):
+        stmt = stmt.where(S.decision == decision)
+    if reason_in:
+        reasons = [s.strip() for s in reason_in.split(',') if s.strip()]
+        if reasons:
+            stmt = stmt.where(S.reason.in_(reasons))
+    if source_in:
+        srcs = [s.strip() for s in source_in.split(',') if s.strip()]
+        if srcs:
+            stmt = stmt.where(R.source.in_(srcs))
+    if year_min is not None:
+        stmt = stmt.where((R.year >= year_min) | (R.year.is_(None)))
+    if year_max is not None:
+        stmt = stmt.where((R.year <= year_max) | (R.year.is_(None)))
+    if q:
+        ql = f"%{q.lower()}%"
+        stmt = stmt.where(or_(func.lower(R.title).like(ql), func.lower(R.abstract).like(ql)))
+
+    # Order by
+    ob = (order_by or "year").lower()
+    if ob == "year":
+        ob_col = R.year
+    elif ob == "source":
+        ob_col = R.source
+    elif ob == "reason":
+        ob_col = S.reason
+    elif ob == "title":
+        ob_col = R.title
+    else:
+        ob_col = R.year
+    if order_dir.lower() == "desc":
+        try:
+            ob_col = ob_col.desc().nulls_last()
+        except Exception:
+            ob_col = ob_col.desc()
+    else:
+        try:
+            ob_col = ob_col.asc().nulls_last()
+        except Exception:
+            ob_col = ob_col.asc()
+    stmt = stmt.order_by(ob_col)
+
+    total = await _count_stmt(stmt)
+    rows = await _select_mappings(stmt.offset(offset).limit(limit))
+    return {"run_id": run_id, "total": total, "limit": limit, "offset": offset, "items": rows}
+
+# ======================= Runs list (paged) ===================================
+
+def _dt_iso(dt_obj):
+    try:
+        return dt_obj.isoformat()
+    except Exception:
+        return str(dt_obj)
+
+@app.get("/runs.page.json")
+async def runs_page(
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    # Fetch page of runs
+    runs_stmt = (
+        SAselect(_db.SearchRun.id, _db.SearchRun.query, _db.SearchRun.created_at)
+        .order_by(_db.SearchRun.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    run_rows = await _select_mappings(runs_stmt)
+    run_ids = [r["id"] for r in run_rows]
+
+    # Totals
+    total_stmt = SAselect(func.count()).select_from(_db.SearchRun)
+    total = await _count_stmt(SAselect(_db.SearchRun))  # use count of select *
+    try:
+        # more accurate count
+        total = await _count_stmt(SAselect(_db.SearchRun.id))
+    except Exception:
+        pass
+
+    # Aggregate counts for this page
+    rec_counts = {}
+    if run_ids:
+        rc_stmt = (
+            SAselect(Record.run_id, func.count().label("n"))
+            .where(Record.run_id.in_(run_ids))
+            .group_by(Record.run_id)
+        )
+        for m in await _select_mappings(rc_stmt):
+            rec_counts[m["run_id"]] = int(m["n"])
+
+    app_counts = {}
+    label_counts: dict[str, dict[str, int]] = {}
+    if run_ids:
+        ac_stmt = (
+            SAselect(Appraisal.run_id, func.count().label("n"))
+            .where(Appraisal.run_id.in_(run_ids))
+            .group_by(Appraisal.run_id)
+        )
+        for m in await _select_mappings(ac_stmt):
+            app_counts[m["run_id"]] = int(m["n"])
+
+        lab_stmt = (
+            SAselect(Appraisal.run_id, Appraisal.rating, func.count().label("n"))
+            .where(Appraisal.run_id.in_(run_ids))
+            .group_by(Appraisal.run_id, Appraisal.rating)
+        )
+        for m in await _select_mappings(lab_stmt):
+            rid = m["run_id"]
+            lab = m["rating"] or ""
+            n = int(m["n"])
+            label_counts.setdefault(rid, {})[lab] = n
+
+    items = []
+    for r in run_rows:
+        rid = r["id"]
+        items.append({
+            "id": rid,
+            "query": r.get("query"),
+            "created_at": _dt_iso(r.get("created_at")),
+            "n_records": int(rec_counts.get(rid, 0)),
+            "n_appraisals": int(app_counts.get(rid, 0)),
+            "label_counts": label_counts.get(rid, {}),
+        })
+
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+# ======================= Run summary =========================================
+
+@app.get("/runs/{run_id}/summary.json")
+async def run_summary(run_id: str):
+    # Basic run info
+    run_info = None
+    rows = await _select_mappings(SAselect(_db.SearchRun.id, _db.SearchRun.query, _db.SearchRun.created_at).where(_db.SearchRun.id == run_id))
+    if rows:
+        r = rows[0]
+        run_info = {"id": r["id"], "query": r.get("query"), "created_at": _dt_iso(r.get("created_at"))}
+    else:
+        run_info = {"id": run_id}
+
+    # Counts
+    counts = {"identified": 0, "deduped": 0, "screened": 0, "excluded": 0, "eligible": 0, "included": 0}
+    if PrismaCounts is not None:
+        pc_rows = await _select_stmt(SAselect(PrismaCounts).where(PrismaCounts.run_id == run_id))
+        if pc_rows:
+            c = pc_rows[0]
+            counts = {
+                "identified": int(getattr(c, "identified", 0) or 0),
+                "deduped": int(getattr(c, "deduped", 0) or 0),
+                "screened": int(getattr(c, "screened", 0) or 0),
+                "excluded": int(getattr(c, "excluded", 0) or 0),
+                "eligible": int(getattr(c, "eligible", 0) or 0),
+                "included": int(getattr(c, "included", 0) or 0),
+            }
+
+    # Exclusion reasons
+    reasons: dict[str, int] = {}
+    if Screening is not None:
+        rs = await _select_mappings(
+            SAselect(Screening.reason.label("reason"), func.count().label("n")).where(
+                Screening.run_id == run_id, Screening.decision == "exclude"
+            ).group_by(Screening.reason)
+        )
+        for m in rs:
+            key = m.get("reason") or "Unspecified"
+            reasons[str(key)] = int(m.get("n") or 0)
+
+    # Label distribution and counts
+    n_records = 0
+    rc = await _select_mappings(SAselect(func.count().label("n")).where(Record.run_id == run_id))
+    if rc:
+        try:
+            n_records = int(rc[0].get("n") or 0)
+        except Exception:
+            n_records = 0
+    n_appraisals = 0
+    lab_counts: dict[str, int] = {}
+    ac = await _select_mappings(SAselect(Appraisal.rating, func.count().label("n")).where(Appraisal.run_id == run_id).group_by(Appraisal.rating))
+    for m in ac:
+        lab_counts[m.get("rating") or ""] = int(m.get("n") or 0)
+        n_appraisals += int(m.get("n") or 0)
+
+    # Per-source counts for kept records
+    per_source = {}
+    ps = await _select_mappings(SAselect(Record.source, func.count().label("n")).where(Record.run_id == run_id).group_by(Record.source))
+    for m in ps:
+        src = m.get("source") or "Unknown"
+        if src == "Scholar":
+            src = "GoogleScholar"
+        per_source[src] = int(m.get("n") or 0)
+
+    return {
+        "run": run_info,
+        "counts": counts,
+        "exclude_reasons": reasons,
+        "n_records": n_records,
+        "n_appraisals": n_appraisals,
+        "label_counts": lab_counts,
+        "source_counts_kept": per_source,
+        "timings": {},
+    }
 
 @app.get("/runs/{run_id}/summary.json")
 async def export_run_summary(run_id: str):
@@ -435,67 +1111,111 @@ def _tiab_expr(terms: list[str]) -> str:
                 out.append(f"{qt}[tiab]")
     return " OR ".join(out) if out else ""
 
-def _press_strategy_medline(lico: LICO, db_name: str = "MEDLINE", interface: str = "PubMed") -> dict:
-    """Build MEDLINE/PubMed strategy with stable MeSH + custom LICO text-words."""
-    L = (lico.learner or "").strip()
-    I = (lico.intervention or "").strip()
-    C = (lico.context or "").strip()
-    O = (lico.outcome or "").strip()
-
-    # MeSH + canonical text words (scaffold)
-    LEARNER_MESH = "\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh]"
-    LEARNER_TXT  = "medical student*[tiab] OR nursing student*[tiab] OR allied health student*[tiab] OR resident*[tiab] OR trainee*[tiab]"
-
-    INTERV_MESH  = "\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh]"
-    INTERV_TXT   = "interprofessional education[tiab] OR simulation-based*[tiab] OR active learning[tiab] OR team-based learning[tiab] OR problem-based learning[tiab]"
-
-    CONTEXT_MESH = "\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh]"
-    CONTEXT_TXT  = "universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR clinical placement[tiab] OR classroom*[tiab]"
-
-    OUTCOME_MESH = "\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh]"
-    OUTCOME_TXT  = "attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR patient outcome*[tiab]"
-
-    # Custom text-words from LICO
-    L_txt = _tiab_expr(_split_terms(L))
-    I_txt = _tiab_expr(_split_terms(I))
-    C_txt = _tiab_expr(_split_terms(C))
-    O_txt = _tiab_expr(_split_terms(O))
-
-    def _merge(stock_mesh: str, stock_txt: str, custom_txt: str) -> str:
-        if custom_txt:
-            return f"({stock_mesh} OR {stock_txt} OR {custom_txt})"
-        return f"({stock_mesh} OR {stock_txt})"
-
-    line1 = _merge(LEARNER_MESH, LEARNER_TXT, L_txt)
-    line2 = _merge(INTERV_MESH, INTERV_TXT, I_txt)
-    line3 = _merge(CONTEXT_MESH, CONTEXT_TXT, C_txt)
-    line4 = _merge(OUTCOME_MESH, OUTCOME_TXT, O_txt)
-
-    lines = [
-        {"n": 1, "type": "Learner",      "text": line1, "hits": None},
-        {"n": 2, "type": "Intervention", "text": line2, "hits": None},
-        {"n": 3, "type": "Context",      "text": line3, "hits": None},
-        {"n": 4, "type": "Outcome",      "text": line4, "hits": None},
-        {"n": 5, "type": "Combine",      "text": "1 AND 2 AND 3 AND 4", "hits": None},
-        {"n": 6, "type": "Limits",       "text": "2015:3000[dp] AND English[la] AND Humans[Mesh]", "hits": None},
+def _load_press_template(name: str | None) -> dict:
+    import yaml
+    tpl_name = (name or os.getenv("PRESS_TEMPLATE", "education")).strip().lower()
+    candidates = [
+        os.path.join("app", "press_templates", f"{tpl_name}.yaml"),
+        os.path.join("press_templates", f"{tpl_name}.yaml"),
     ]
+    for p in candidates:
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+    # fallback to general
+    fallback = os.path.join("app", "press_templates", "general.yaml")
+    if os.path.exists(fallback):
+        with open(fallback, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    return {"id": "general", "facets": [], "limits": {"years_default": os.getenv("PRESS_YEAR_MIN", "2019-")}}
 
-    return {
-        "database": db_name,
-        "interface": interface,
-        "lines": lines,
+def _facet_text_for_pubmed(mesh: list[str] | None, text_words: list[str] | None, lico_terms: list[str], use_stock: bool) -> str:
+    parts = []
+    if use_stock and mesh:
+        parts.append(" OR ".join([f'"{m}"[Mesh]' for m in mesh]))
+    if use_stock and text_words:
+        parts.append(" OR ".join([_tiab_expr([w]) for w in text_words]))
+    if lico_terms:
+        parts.append(_tiab_expr(lico_terms))
+    return "(" + " OR ".join([p for p in parts if p]) + ")" if parts else ""
+
+def _press_strategy_medline(lico: LICO, *, template: str | None = None, use_stock: bool = True, db_name: str = "MEDLINE", interface: str = "PubMed", years_override: str | None = None) -> dict:
+    """Build MEDLINE/PubMed strategy using a configurable template and optional LICO merge."""
+    tpl = _load_press_template(template)
+    facets = tpl.get("facets") or []
+    limits = tpl.get("limits") or {}
+    years = years_override or limits.get("years_default") or os.getenv("PRESS_YEAR_MIN", "2019-")
+
+    lico_map = {
+        "learner": _split_terms((lico.learner or "").strip()),
+        "intervention": _split_terms((lico.intervention or "").strip()),
+        "context": _split_terms((lico.context or "").strip()),
+        "outcome": _split_terms((lico.outcome or "").strip()),
     }
 
-def plan_press_from_lico(lico: LICO, databases: Optional[List[DatabaseSpec]] = None) -> dict:
+    # Build facet lines; skip empty ones, then number sequentially
+    raw_facet_lines = []
+    for facet in facets:
+        fname = str(facet.get("name", "")).strip().lower()
+        mesh = facet.get("mesh") or []
+        tw = facet.get("text_words") or []
+        l_terms: list[str] = []
+        if "learner" in fname:
+            l_terms = lico_map["learner"]
+        elif "intervention" in fname:
+            l_terms = lico_map["intervention"]
+        elif "context" in fname:
+            l_terms = lico_map["context"]
+        elif "outcome" in fname:
+            l_terms = lico_map["outcome"]
+        facet_text = _facet_text_for_pubmed(mesh, tw, l_terms, use_stock)
+        # Map facet name to allowed StrategyLine.type, else fall back to "Text"
+        if "learner" in fname:
+            line_type = "Learner"
+        elif "intervention" in fname:
+            line_type = "Intervention"
+        elif "context" in fname:
+            line_type = "Context"
+        elif "outcome" in fname:
+            line_type = "Outcome"
+        else:
+            line_type = "Text"
+        if facet_text:
+            raw_facet_lines.append({"type": line_type, "text": facet_text})
+
+    lines = []
+    if raw_facet_lines:
+        for i, lf in enumerate(raw_facet_lines, start=1):
+            lines.append({"n": i, "type": lf["type"], "text": lf["text"], "hits": None})
+        combine = " AND ".join([str(i) for i in range(1, len(raw_facet_lines)+1)])
+        lines.append({"n": len(raw_facet_lines)+1, "type": "Combine", "text": combine, "hits": None})
+
+    lim_parts = []
+    if isinstance(years, str) and years.endswith("-"):
+        y0 = years[:-1]
+        if y0.isdigit():
+            lim_parts.append(f"{y0}:3000[dp]")
+    if limits.get("language_default"):
+        lim_parts.append(f"{limits['language_default']}[la]")
+    if limits.get("humans_default"):
+        lim_parts.append("Humans[Mesh]")
+    if lim_parts:
+        # If there were no facet lines, start numbering at 1
+        next_n = (lines[-1]["n"] + 1) if lines else 1
+        lines.append({"n": next_n, "type": "Limits", "text": " AND ".join(lim_parts), "hits": None})
+
+    return {"database": db_name, "interface": interface, "lines": lines}
+
+def plan_press_from_lico(lico: LICO, databases: Optional[List[DatabaseSpec]] = None, *, template: str | None = None, use_stock: bool = True, years: str | None = None) -> dict:
     """Return a PRESS-compatible plan dict (question_lico + strategies + checklist)."""
     dbs = databases or [DatabaseSpec(name="MEDLINE", interface="PubMed")]
     db = dbs[0]
-    strat = _press_strategy_medline(lico, db_name=db.name or "MEDLINE", interface=db.interface or "PubMed")
+    strat = _press_strategy_medline(lico, template=template, use_stock=use_stock, db_name=db.name or "MEDLINE", interface=db.interface or "PubMed", years_override=years)
 
     has_custom = any([(lico.learner or "").strip(), (lico.intervention or "").strip(), (lico.context or "").strip(), (lico.outcome or "").strip()])
     checklist = {
         "translation": "pass",
-        "subject_headings": "pass",
+        "subject_headings": "pass" if use_stock else "suggest",
         "text_words": "pass" if has_custom else "suggest",
         "spelling_syntax_lines": "pass",
         "limits_filters": "pass",
@@ -504,10 +1224,10 @@ def plan_press_from_lico(lico: LICO, databases: Optional[List[DatabaseSpec]] = N
 
     return {
         "question_lico": {
-            "learner": (lico.learner or None),
-            "intervention": (lico.intervention or None),
-            "context": (lico.context or None),
-            "outcome": (lico.outcome or None),
+            "learner": (lico.learner or ""),
+            "intervention": (lico.intervention or ""),
+            "context": (lico.context or ""),
+            "outcome": (lico.outcome or ""),
         },
         "strategies": {
             "MEDLINE": strat
@@ -546,11 +1266,13 @@ def _strategy_ns_to_dict(ns: _NS) -> dict:
 class PressPlanBody(BaseModel):
     lico: LICO
     databases: Optional[List[DatabaseSpec]] = None
+    template: Optional[str] = None
+    use_stock: Optional[bool] = True
 
 @app.post("/press/plan", response_model=PressPlanResponse)
 async def make_press_plan(body: PressPlanBody):
     """Return a PRESS-compatible, LICO-driven strategy (numbered boolean lines + self-check)."""
-    return plan_press_from_lico(body.lico, body.databases)
+    return plan_press_from_lico(body.lico, body.databases, template=body.template, use_stock=bool(body.use_stock))
 
 async def _get_run_query(run_id: str) -> Optional[str]:
     """Try to load the original free-text query for a run from common model names."""
@@ -608,7 +1330,7 @@ async def press_plan_for_run(
 
 @app.post("/press/plan/hits", response_model=PressPlanResponse)
 async def make_press_plan_with_hits(body: PressPlanBody):
-    plan = plan_press_from_lico(body.lico, body.databases)
+    plan = plan_press_from_lico(body.lico, body.databases, template=body.template, use_stock=bool(body.use_stock))
     # fill for MEDLINE/PubMed only
     strat = plan.get("strategies", {}).get("MEDLINE")
     if strat:

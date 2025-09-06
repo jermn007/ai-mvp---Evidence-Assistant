@@ -61,9 +61,29 @@ def persist_run(state: Dict[str, Any]) -> str:
             )
 
         # Screenings (persist reasons for PRISMA)
+        # Ensure every screened item has a corresponding Record row for FK integrity.
+        # For excluded items (not in id_map), insert a minimal placeholder Record.
+        minimal_created: Dict[str, bool] = {}
         for scr in state.get("screenings", []) or []:
-            ext_id = _get_attr(scr, "record_id", "")
-            db_rec_id = id_map.get(ext_id, f"{run.id}:{ext_id}")
+            ext_id = _get_attr(scr, "record_id", "") or ""
+            db_rec_id = id_map.get(ext_id)
+            if not db_rec_id:
+                db_rec_id = f"{run.id}:{ext_id}"
+                if not minimal_created.get(db_rec_id):
+                    # Insert minimal placeholder to satisfy FK; fields kept empty/nullable
+                    s.add(
+                        Record(
+                            id=db_rec_id,
+                            run_id=run.id,
+                            title="",
+                            abstract=None,
+                            year=None,
+                            doi=None,
+                            url=None,
+                            source="",
+                        )
+                    )
+                    minimal_created[db_rec_id] = True
             s.add(
                 Screening(
                     run_id=run.id,
@@ -81,6 +101,27 @@ def persist_run(state: Dict[str, Any]) -> str:
             scores = _get_attr(a, "scores", {}) or {}
             rationale = _get_attr(a, "rationale", "")
             citations = _get_attr(a, "citations", []) or []
+            # Extract numeric score_final if present, otherwise compute from component scores
+            score_final = None
+            try:
+                if isinstance(scores, dict):
+                    if "final" in scores and scores.get("final") is not None:
+                        score_final = float(scores.get("final"))
+                    else:
+                        # Attempt to compute from recency/design/bias if available
+                        rec = float(scores.get("recency")) if scores.get("recency") is not None else None
+                        des = float(scores.get("design")) if scores.get("design") is not None else None
+                        bia = float(scores.get("bias")) if scores.get("bias") is not None else None
+                        if rec is not None and des is not None and bia is not None:
+                            try:
+                                from app.rubric import Rubric
+                                rb = Rubric.load("rubric.yaml")
+                                w = rb.weights
+                                score_final = rec*w["recency"] + des*w["design"] + bia*w["bias"]
+                            except Exception:
+                                score_final = None
+            except Exception:
+                score_final = None
 
             s.add(
                 Appraisal(
@@ -90,6 +131,7 @@ def persist_run(state: Dict[str, Any]) -> str:
                     scores_json=json.dumps(scores, ensure_ascii=False),
                     rationale=rationale,
                     citations_json=json.dumps(citations, ensure_ascii=False),
+                    score_final=score_final,
                 )
             )
 
