@@ -19,6 +19,9 @@ python app/run_local.py
 # Run FastAPI server
 uvicorn app.server:app --reload
 
+# Run streamlit front-end
+streamlit run app/ui/dashboard.py
+
 # Database migrations
 alembic upgrade head
 alembic revision --autogenerate -m "description"
