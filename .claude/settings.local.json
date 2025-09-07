@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(pip --version)",
+      "Bash(pip install:*)",
+      "Bash(alembic upgrade:*)",
+      "Bash(PYTHONPATH=. alembic upgrade head)",
+      "Bash(PYTHONPATH=. alembic stamp ee495556fd03)",
+      "Bash(uvicorn:*)",
+      "Bash(curl:*)",
+      "Bash(sqlite3:*)",
+      "Bash(PYTHONPATH=. alembic revision --autogenerate -m \"create initial schema\")",
+      "Bash(python:*)",
+      "Bash(streamlit run:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npx tsc:*)"
     ],
     "deny": [],
     "ask": []

@@ -12,6 +12,7 @@ from app.models import (
     PressPlan, RecordModel, ScreeningModel, AppraisalModel, PrismaCountsModel
 )
 from app.rubric import Rubric
+from app.ai_service import get_ai_service
 from app.sources import (
     pubmed_search_async, crossref_search_async, arxiv_search_async, eric_search_async,
     s2_search_async, scholar_serpapi_async,
@@ -151,20 +152,134 @@ def harvest(state):
     return state
 
 
-def dedupe_screen(state):
+async def _screen_record(record: RecordModel, use_ai: bool = False, inclusion_criteria: list = None, exclusion_criteria: list = None) -> tuple[str, str]:
+    """Apply inclusion/exclusion criteria to a single record."""
+    # Try AI screening first if enabled
+    if use_ai:
+        ai_service = get_ai_service()
+        if ai_service.is_available():
+            try:
+                # Default criteria if not provided
+                default_inclusion = [
+                    "Published 2018 or later",
+                    "Primary research studies",
+                    "Human subjects",
+                    "English language",
+                    "Related to education or healthcare training"
+                ]
+                default_exclusion = [
+                    "Pre-2018 publication",
+                    "Animal studies", 
+                    "Editorial, commentary, or opinion pieces",
+                    "Non-English publications",
+                    "Not relevant to research question"
+                ]
+                
+                assessment = await ai_service.assess_study_relevance(
+                    title=record.title or "",
+                    abstract=record.abstract,
+                    inclusion_criteria=inclusion_criteria or default_inclusion,
+                    exclusion_criteria=exclusion_criteria or default_exclusion
+                )
+                
+                if assessment:
+                    if assessment.inclusion_recommendation == "exclude":
+                        return "exclude", assessment.exclusion_reason or "AI screening"
+                    elif assessment.inclusion_recommendation == "include":
+                        return "include", ""
+                    # If "uncertain", fall through to rule-based screening
+                        
+            except Exception as e:
+                logger.warning(f"AI screening failed for record {record.record_id}: {e}")
+                # Fall through to rule-based screening
+    
+    # Rule-based screening (original logic)
+    # Publication year criteria
+    if (record.year or 0) < 2018:
+        return "exclude", "Pre-2018"
+    
+    # Check for non-English content (basic heuristic)
+    title = (record.title or "").lower()
+    abstract = (record.abstract or "").lower()
+    combined_text = f"{title} {abstract}"
+    
+    # Check for study types that are typically excluded
+    if any(term in combined_text for term in ["editorial", "letter to", "commentary", "opinion", "book review", "conference abstract"]):
+        return "exclude", "Study type"
+    
+    # Check for animal studies (if this is a human-focused review)
+    animal_terms = ["animal", "mice", "rats", "mouse", "pig", "sheep", "dog", "cat", "rabbit", "primate", "bovine", "porcine", "murine", "rodent"]
+    human_terms = ["human", "patient", "participant", "subject", "clinical", "hospital", "nursing", "medical student"]
+    
+    animal_count = sum(1 for term in animal_terms if term in combined_text)
+    human_count = sum(1 for term in human_terms if term in combined_text)
+    
+    if animal_count > human_count and animal_count > 2:
+        return "exclude", "Animal study"
+    
+    # Check for non-research content
+    if any(term in combined_text for term in ["review", "systematic review", "meta-analysis", "guidelines", "recommendations"]):
+        # Allow systematic reviews but exclude other types of reviews
+        if "systematic review" not in combined_text and "meta-analysis" not in combined_text:
+            if "review" in combined_text and len([t for t in ["research", "study", "trial", "experiment"] if t in combined_text]) < 2:
+                return "exclude", "Not primary research"
+    
+    # Check for language (basic check for non-Latin scripts)
+    if any(ord(char) > 1000 for char in title[:100]):  # Basic check for non-Latin characters
+        return "exclude", "Non-English"
+    
+    # Check for relevance to education/learning (context-specific)
+    education_terms = ["education", "teaching", "learning", "training", "curriculum", "student", "academic", "school"]
+    if not any(term in combined_text for term in education_terms) and len(combined_text) > 100:
+        # Only exclude if there's substantial content but no educational terms
+        return "exclude", "Not relevant"
+    
+    return "include", ""
+
+
+async def dedupe_screen(state):
     t0 = time.perf_counter()
 
     recs: List[RecordModel] = state.get("records", [])
     deduped = _dedupe_records(recs)
+    
+    # Check if AI screening is enabled (can be set in state)
+    use_ai_screening = state.get("use_ai_screening", False)
+    inclusion_criteria = state.get("inclusion_criteria")
+    exclusion_criteria = state.get("exclusion_criteria")
 
     screenings: List[ScreeningModel] = []
     kept: List[RecordModel] = []
-    for r in deduped:
-        if (r.year or 0) < 2018:
-            screenings.append(ScreeningModel(record_id=r.record_id, decision="exclude", reason="Pre-2018"))
-        else:
-            screenings.append(ScreeningModel(record_id=r.record_id, decision="include", reason=""))
-            kept.append(r)
+    
+    # Process records (potentially in parallel for AI screening)
+    if use_ai_screening:
+        # Process with AI assistance
+        tasks = []
+        import asyncio
+        for r in deduped:
+            task = _screen_record(r, use_ai=True, inclusion_criteria=inclusion_criteria, exclusion_criteria=exclusion_criteria)
+            tasks.append(task)
+        
+        screening_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for r, result in zip(deduped, screening_results):
+            if isinstance(result, Exception):
+                logger.warning(f"Screening failed for record {r.record_id}: {result}")
+                # Fall back to rule-based screening
+                decision, reason = await _screen_record(r, use_ai=False)
+            else:
+                decision, reason = result
+                
+            screenings.append(ScreeningModel(record_id=r.record_id, decision=decision, reason=reason))
+            if decision == "include":
+                kept.append(r)
+    else:
+        # Standard rule-based screening
+        for r in deduped:
+            decision, reason = await _screen_record(r, use_ai=False)
+            screenings.append(ScreeningModel(record_id=r.record_id, decision=decision, reason=reason))
+            if decision == "include":
+                kept.append(r)
 
     pc = state.get("prisma") or PrismaCountsModel()
     pc.deduped = len(deduped)
@@ -185,20 +300,42 @@ def dedupe_screen(state):
     return state
 
 
-def appraise(state):
+async def appraise(state):
     t0 = time.perf_counter()
     global _RUBRIC
     if _RUBRIC is None:
         _RUBRIC = Rubric.load("rubric.yaml")
 
+    # Check if AI rationale generation is enabled
+    use_ai_rationale = state.get("use_ai_rationale", False)
+    ai_service = get_ai_service() if use_ai_rationale else None
+
     apps: List[AppraisalModel] = []
     for r in state.get("records", []):
         rating, scores = _RUBRIC.rate(r.year, r.title, r.abstract)
+        
+        # Generate AI rationale if enabled and available
+        rationale = "Quality assessment based on rubric criteria"
+        if use_ai_rationale and ai_service and ai_service.is_available():
+            try:
+                ai_rationale = await ai_service.generate_quality_rationale(
+                    title=r.title or "",
+                    abstract=r.abstract,
+                    year=r.year,
+                    rating=rating,
+                    scores=scores
+                )
+                if ai_rationale:
+                    rationale = ai_rationale
+            except Exception as e:
+                logger.warning(f"AI rationale generation failed for record {r.record_id}: {e}")
+                # Use default rationale
+        
         apps.append(AppraisalModel(
             record_id=r.record_id,
             rating=rating,
+            rationale=rationale,
             scores={k: float(v) for k, v in scores.items()},
-            rationale=f"Weighted scores → final={scores['final']:.2f} via rubric.yaml",
             citations=[r.url or ""],
         ))
 

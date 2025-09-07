@@ -1,0 +1,62 @@
+.lico-form {
+  margin-top: 1rem;
+}
+
+.lico-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.lico-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.lico-field label {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.lico-field label strong {
+  color: var(--primary-color);
+  font-size: 1.25em;
+}
+
+.field-description {
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.lico-field input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid var(--border-color);
+  border-radius: var(--border-radius);
+  font-size: 0.875rem;
+  transition: var(--transition);
+}
+
+.lico-field input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgb(14 165 233 / 0.1);
+}
+
+.lico-field input:disabled {
+  background-color: var(--bg-tertiary);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+@media (max-width: 768px) {
+  .lico-grid {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+}

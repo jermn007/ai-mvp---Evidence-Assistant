@@ -7,7 +7,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
-DB_URL = os.getenv("DATABASE_URL", "sqlite:///artifacts.db")
+DB_URL = os.getenv("DATABASE_URL", "sqlite:///app.db")
 engine = create_engine(DB_URL, echo=False, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 Base = declarative_base()

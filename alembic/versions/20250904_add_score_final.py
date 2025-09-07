@@ -9,7 +9,7 @@ import re
 
 # !! set this to your real previous revision id
 revision = "20250904_add_score_final"
-down_revision = "<PUT_YOUR_PREV_REVISION_ID_HERE>"
+down_revision = "5a2ea3e447f0"
 branch_labels = None
 depends_on = None
 

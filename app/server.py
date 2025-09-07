@@ -40,6 +40,7 @@ from app.models import PressPlan
 # PRESS contract / planner types + hits helper
 from app.press_contract import LICO, DatabaseSpec, PressPlanResponse, PressStrategy, StrategyLine
 from app.press_hits import fill_hits_for_pubmed, _expand_lines_to_queries
+from app.ai_service import get_ai_service, LICOEnhancement, PressStrategyAnalysis, StudyRelevanceAssessment
 
 # --- DB compatibility layer (works with async or sync app.db) -----------------
 _db = importlib.import_module("app.db")
@@ -164,7 +165,7 @@ def health_checkpointer():
 
 
 @app.post("/run")
-def run(req: RunRequest):
+async def run(req: RunRequest):
     try:
         tid = req.thread_id or str(uuid4())
         # Build initial state: support either free-text query or LICO-driven query
@@ -188,7 +189,7 @@ def run(req: RunRequest):
             # Fallback to free-text query
             init_state["query"] = (req.query or "").strip()
 
-        final = GRAPH.invoke(init_state, config={"configurable": {"thread_id": tid}})
+        final = await GRAPH.ainvoke(init_state, config={"configurable": {"thread_id": tid}})
         run_id = persist_run(final)
         prisma = final["prisma"].model_dump() if hasattr(final.get("prisma"), "model_dump") else final.get("prisma", {})
         ratings = [a.rating for a in final.get("appraisals", [])]
@@ -256,7 +257,7 @@ def _genericize_query(pubmed_q: str) -> str:
     return q.strip()
 
 @app.post("/run/press")
-def run_with_press(body: RunWithPressBody):
+async def run_with_press(body: RunWithPressBody):
     try:
         tid = body.thread_id or str(uuid4())
         plan = body.plan
@@ -281,7 +282,7 @@ def run_with_press(body: RunWithPressBody):
         )
 
         init_state = {"query": generic_q, "press": press_snapshot}
-        final = GRAPH.invoke(init_state, config={"configurable": {"thread_id": tid}})
+        final = await GRAPH.ainvoke(init_state, config={"configurable": {"thread_id": tid}})
         run_id = persist_run(final)
         prisma = final["prisma"].model_dump() if hasattr(final.get("prisma"), "model_dump") else final.get("prisma", {})
         ratings = [a.rating for a in final.get("appraisals", [])]
@@ -1268,11 +1269,59 @@ class PressPlanBody(BaseModel):
     databases: Optional[List[DatabaseSpec]] = None
     template: Optional[str] = None
     use_stock: Optional[bool] = True
+    enable_ai: Optional[bool] = False
+    research_domain: Optional[str] = None
 
 @app.post("/press/plan", response_model=PressPlanResponse)
 async def make_press_plan(body: PressPlanBody):
     """Return a PRESS-compatible, LICO-driven strategy (numbered boolean lines + self-check)."""
     return plan_press_from_lico(body.lico, body.databases, template=body.template, use_stock=bool(body.use_stock))
+
+
+@app.post("/press/plan/ai-enhanced", response_model=dict)
+async def make_ai_enhanced_press_plan(body: PressPlanBody):
+    """
+    Return an AI-enhanced PRESS plan with intelligent suggestions and analysis.
+    Combines traditional PRESS planning with AI-powered enhancements.
+    """
+    # Generate basic plan
+    base_plan = plan_press_from_lico(body.lico, body.databases, template=body.template, use_stock=bool(body.use_stock))
+    
+    result = {
+        "base_plan": base_plan,
+        "ai_enhancement": None,
+        "strategy_analysis": None,
+        "ai_available": False
+    }
+    
+    # Add AI enhancements if requested and available
+    if body.enable_ai:
+        ai_service = get_ai_service()
+        if ai_service.is_available():
+            result["ai_available"] = True
+            
+            try:
+                # Get AI LICO enhancement suggestions
+                enhancement = await ai_service.enhance_lico_terms(
+                    lico=body.lico,
+                    research_domain=body.research_domain
+                )
+                result["ai_enhancement"] = enhancement
+                
+                # Analyze the generated strategy
+                strategy_lines = []
+                if base_plan.get("strategies") and "MEDLINE" in base_plan["strategies"]:
+                    lines = base_plan["strategies"]["MEDLINE"].get("lines", [])
+                    strategy_lines = [{"type": line.get("type"), "text": line.get("text")} for line in lines]
+                
+                if strategy_lines:
+                    analysis = await ai_service.analyze_press_strategy(strategy_lines)
+                    result["strategy_analysis"] = analysis
+                
+            except Exception as e:
+                result["ai_error"] = str(e)
+    
+    return result
 
 async def _get_run_query(run_id: str) -> Optional[str]:
     """Try to load the original free-text query for a run from common model names."""
@@ -1357,3 +1406,180 @@ async def press_plan_for_run_with_hits(
         ns = await fill_hits_for_pubmed(ns)
         base["strategies"]["MEDLINE"] = _strategy_ns_to_dict(ns)
     return base
+
+
+# --- AI-Enhanced Features ----------------------------------------------------
+
+class LICOEnhancementRequest(BaseModel):
+    lico: LICO
+    research_domain: Optional[str] = None
+
+
+class PressStrategyAnalysisRequest(BaseModel):
+    strategy_lines: List[dict]
+
+
+class StudyRelevanceRequest(BaseModel):
+    title: str
+    abstract: Optional[str] = None
+    inclusion_criteria: List[str] = []
+    exclusion_criteria: List[str] = []
+    research_question: Optional[str] = None
+
+
+@app.post("/ai/enhance-lico", response_model=Optional[LICOEnhancement])
+async def ai_enhance_lico(request: LICOEnhancementRequest):
+    """
+    Get AI-powered suggestions to enhance LICO terms for better search coverage.
+    Provides synonyms, related terms, MeSH suggestions, and template recommendations.
+    """
+    ai_service = get_ai_service()
+    if not ai_service.is_available():
+        raise HTTPException(status_code=503, detail="AI service unavailable. Check OPENAI_API_KEY configuration.")
+    
+    try:
+        enhancement = await ai_service.enhance_lico_terms(
+            lico=request.lico,
+            research_domain=request.research_domain
+        )
+        return enhancement
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI enhancement failed: {str(e)}")
+
+
+@app.post("/ai/analyze-strategy", response_model=Optional[PressStrategyAnalysis])
+async def ai_analyze_press_strategy(request: PressStrategyAnalysisRequest):
+    """
+    Get AI analysis of a PRESS search strategy with suggestions for improvement.
+    Evaluates completeness, balance, and provides specific recommendations.
+    """
+    ai_service = get_ai_service()
+    if not ai_service.is_available():
+        raise HTTPException(status_code=503, detail="AI service unavailable. Check OPENAI_API_KEY configuration.")
+    
+    try:
+        analysis = await ai_service.analyze_press_strategy(
+            strategy_lines=request.strategy_lines
+        )
+        return analysis
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
+
+
+@app.post("/ai/assess-relevance", response_model=Optional[StudyRelevanceAssessment])
+async def ai_assess_study_relevance(request: StudyRelevanceRequest):
+    """
+    Get AI assessment of study relevance for systematic review inclusion.
+    Provides detailed reasoning and inclusion/exclusion recommendations.
+    """
+    ai_service = get_ai_service()
+    if not ai_service.is_available():
+        raise HTTPException(status_code=503, detail="AI service unavailable. Check OPENAI_API_KEY configuration.")
+    
+    try:
+        assessment = await ai_service.assess_study_relevance(
+            title=request.title,
+            abstract=request.abstract,
+            inclusion_criteria=request.inclusion_criteria,
+            exclusion_criteria=request.exclusion_criteria,
+            research_question=request.research_question
+        )
+        return assessment
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI assessment failed: {str(e)}")
+
+
+@app.post("/ai/suggest-template")
+async def ai_suggest_template(lico: LICO):
+    """
+    Get smart template suggestion based on LICO content analysis.
+    Returns the most appropriate template: clinical, education, or general.
+    """
+    ai_service = get_ai_service()
+    try:
+        suggested_template = ai_service.suggest_template(lico)
+        return {
+            "suggested_template": suggested_template,
+            "available_templates": ["clinical", "education", "general"],
+            "reasoning": f"Based on the content analysis, the '{suggested_template}' template best matches your research focus."
+        }
+    except Exception as e:
+        return {
+            "suggested_template": "general",
+            "available_templates": ["clinical", "education", "general"], 
+            "reasoning": "Default template selected due to analysis error.",
+            "error": str(e)
+        }
+
+
+# Request models for new AI endpoints
+class ResearchQuestionRequest(BaseModel):
+    question: str
+
+class LICORequest(BaseModel):
+    lico: LICO
+
+
+@app.post("/ai/generate-question")
+async def ai_generate_research_question(request: LICORequest):
+    """
+    Generate an academic research question from LICO components.
+    """
+    ai_service = get_ai_service()
+    try:
+        question = await ai_service.generate_research_question(request.lico)
+        if question is None:
+            raise HTTPException(status_code=503, detail="AI service unavailable")
+        return {"question": question}
+    except Exception as e:
+        logger.error(f"Error generating research question: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate research question: {str(e)}")
+
+
+@app.post("/ai/extract-lico") 
+async def ai_extract_lico_from_question(request: ResearchQuestionRequest):
+    """
+    Extract LICO components from a research question.
+    """
+    ai_service = get_ai_service()
+    try:
+        lico = await ai_service.extract_lico_from_question(request.question)
+        if lico is None:
+            raise HTTPException(status_code=503, detail="AI service unavailable")
+        return {"lico": lico}
+    except Exception as e:
+        logger.error(f"Error extracting LICO from question: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to extract LICO: {str(e)}")
+
+
+@app.post("/ai/enhance-question")
+async def ai_enhance_research_question(request: ResearchQuestionRequest):
+    """
+    Enhance and improve a research question for systematic review quality.
+    """
+    ai_service = get_ai_service()
+    try:
+        enhanced_question = await ai_service.enhance_research_question(request.question)
+        if enhanced_question is None:
+            raise HTTPException(status_code=503, detail="AI service unavailable")
+        return {"enhanced_question": enhanced_question}
+    except Exception as e:
+        logger.error(f"Error enhancing research question: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to enhance research question: {str(e)}")
+
+
+@app.get("/ai/status")
+async def ai_status():
+    """Check AI service availability and configuration."""
+    ai_service = get_ai_service()
+    return {
+        "available": ai_service.is_available(),
+        "model": ai_service.config.model if ai_service.is_available() else None,
+        "features": [
+            "LICO enhancement",
+            "PRESS strategy analysis", 
+            "Study relevance assessment",
+            "Quality rationale generation",
+            "Smart template selection"
+        ] if ai_service.is_available() else []
+    }
