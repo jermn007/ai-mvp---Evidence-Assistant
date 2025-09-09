@@ -30,10 +30,12 @@ class Record(Base):
     run_id = Column(String, ForeignKey("search_runs.id"), nullable=False, index=True)
     title = Column(Text, nullable=False)
     abstract = Column(Text, nullable=True)
+    authors = Column(Text, nullable=True)  # Comma-separated author names
     year = Column(Integer, nullable=True)
     doi = Column(String, nullable=True, index=True)
     url = Column(Text, nullable=True)
     source = Column(String, nullable=True)
+    publication_type = Column(String, nullable=True)  # Journal Article, Conference Paper, Preprint, etc.
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     run = relationship("SearchRun", back_populates="records")
 

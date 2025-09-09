@@ -43,10 +43,42 @@ interface RecordWithAppraisal {
   appraisal_color?: 'Red' | 'Amber' | 'Green'
   appraisal_reasoning?: string
   ai_review_type?: 'full_text' | 'abstract_only'
+  status?: 'Include' | 'Exclude'  // For display purposes
 }
 
-type SortField = 'title' | 'appraisal_score' | 'publication_type' | 'year' | 'authors'
+type SortField = 'title' | 'appraisal_score' | 'publication_type' | 'year' | 'authors' | 'status'
 type SortOrder = 'asc' | 'desc'
+
+// Helper functions for excluded records
+function _generateTitleFromId(recordId: string, reason?: string): string {
+  if (reason) {
+    const reasonMap: Record<string, string> = {
+      'Pre-2018': 'Study published before 2018 (excluded)',
+      'Not relevant': 'Study not relevant to research question (excluded)',
+      'Not primary research': 'Non-primary research (excluded)',
+      'Non-English': 'Non-English publication (excluded)',
+      'No full text': 'Full text not available (excluded)'
+    }
+    return reasonMap[reason] || `Study excluded: ${reason}`
+  }
+  
+  // Extract some info from record ID if available
+  if (recordId.includes('doi:')) {
+    return 'Study identified by DOI (excluded)'
+  } else if (recordId.includes('pmid:')) {
+    return 'PubMed study (excluded)'
+  } else {
+    return 'Academic study (excluded)'
+  }
+}
+
+function _inferSourceFromId(recordId: string): string {
+  if (recordId.includes('pmid:')) return 'PubMed'
+  if (recordId.includes('doi:')) return 'Crossref'
+  if (recordId.includes('arxiv:')) return 'arXiv'
+  if (recordId.includes('eric:')) return 'ERIC'
+  return 'Academic Database'
+}
 
 // Enhanced mock data generator for realistic paper information
 function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
@@ -185,7 +217,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       title: paper.title || `Study Title ${index + 1}`,
       authors: paper.authors || `Author A., Author B.${index}`,
       year: paper.year || (2020 + Math.floor(Math.random() * 4)),
-      source: paper.source || 'Unknown',
+      source: paper.source || 'Academic Database',
       doi: paper.doi || `10.1000/example.${index}`,
       url: (paper as any).url,
       publication_type: paper.publication_type || 'Research Article',
@@ -256,11 +288,14 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
   const [sortedRecords, setSortedRecords] = useState<RecordWithAppraisal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>('')
-  const [selectedTab, setSelectedTab] = useState<'summary' | 'records' | 'screening'>('summary')
+  const [selectedTab, setSelectedTab] = useState<'summary' | 'records' | 'screening' | 'synthesis'>('summary')
   const [sortField, setSortField] = useState<SortField>('appraisal_score')
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
   const [researchQuestion, setResearchQuestion] = useState<string>('')
   const [aiExplanationsLoading, setAiExplanationsLoading] = useState<boolean>(false)
+  const [synthesisData, setSynthesisData] = useState<any>(null)
+  const [synthesisLoading, setSynthesisLoading] = useState<boolean>(false)
+  const [synthesisError, setSynthesisError] = useState<string>('')
 
   useEffect(() => {
     const fetchData = async () => {
@@ -314,19 +349,19 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                 const mappedRecords: RecordWithAppraisal[] = recordsData.items.map((apiRecord: any) => ({
                   id: apiRecord.record_id, // Map record_id to id
                   title: apiRecord.title || 'Untitled',
-                  authors: apiRecord.authors || 'Authors not specified', // API doesn't provide authors field
+                  authors: apiRecord.authors || 'Authors not specified', // Now provided by API
                   year: apiRecord.year,
-                  source: apiRecord.source || 'Unknown',
+                  source: apiRecord.source || 'Academic Database',
                   abstract: apiRecord.abstract,
                   doi: apiRecord.doi,
                   url: apiRecord.url,
-                  publication_type: 'Journal Article', // API doesn't provide this field
+                  publication_type: apiRecord.publication_type || 'Journal Article', // Now provided by API
                   screening_decision: 'include', // API doesn't provide screening decisions, default to include since these are appraised records
-                  screening_reason: 'Included for appraisal',
-                  screening_ai_explanation: 'Study met initial screening criteria and was included for quality assessment',
+                  screening_reason: '',
+                  screening_ai_explanation: 'Study met screening criteria',
                   appraisal_score: apiRecord.score_final || 0,
                   appraisal_color: apiRecord.rating as 'Red' | 'Amber' | 'Green', // Map rating field to appraisal_color
-                  appraisal_reasoning: apiRecord.rationale || 'Quality assessment based on rubric criteria',
+                  appraisal_reasoning: apiRecord.rationale,
                   ai_review_type: 'abstract_only' // Default since we don't have full text info
                 }))
                 
@@ -386,33 +421,75 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
         } else if (runId) {
           // Fetch from API endpoints
           const summaryData = await apiClient.getRunSummary(runId)
-          setSummary(summaryData)
           
-          const recordsData = await apiClient.getRecordsWithAppraisals(runId, {
+          // Map API summary data to expected RunSummary format
+          const mappedSummary: RunSummary = {
+            run_id: summaryData.run?.id || runId,
+            status: 'completed',
+            created_at: summaryData.run?.created_at || new Date().toISOString(),
+            total_records: summaryData.n_records || 0,
+            screened_records: summaryData.counts?.screened || 0,
+            included_records: summaryData.counts?.included || 0,
+            excluded_records: summaryData.counts?.excluded || 0,
+            appraised_records: summaryData.n_appraisals || 0,
+            prisma_counts: summaryData.counts ? {
+              initial_records: summaryData.counts.identified || 0,
+              after_deduplication: summaryData.counts.deduped || 0,
+              after_screening: summaryData.counts.screened || 0,
+              after_appraisal: summaryData.counts.eligible || 0,
+              final_included: summaryData.counts.included || 0
+            } : undefined
+          }
+          setSummary(mappedSummary)
+          
+          // Fetch all screening records (included + excluded) for complete view
+          const screeningsData = await apiClient.getScreeningsWithRecords(runId, {
+            limit: 100, // Get more records to show all
+            offset: 0
+          })
+          
+          // Also fetch appraisal data for included records
+          const appraisalsData = await apiClient.getRecordsWithAppraisals(runId, {
             limit: 50,
             offset: 0
           })
           
-          // Map API data to frontend expected format for runId case too
-          if (recordsData.items && recordsData.items.length > 0) {
-            const mappedRecords: RecordWithAppraisal[] = recordsData.items.map((apiRecord: any) => ({
-              id: apiRecord.record_id,
-              title: apiRecord.title || 'Untitled',
-              authors: apiRecord.authors || 'Authors not specified',
-              year: apiRecord.year,
-              source: apiRecord.source || 'Unknown',
-              abstract: apiRecord.abstract,
-              doi: apiRecord.doi,
-              url: apiRecord.url,
-              publication_type: 'Journal Article',
-              screening_decision: 'include',
-              screening_reason: 'Included for appraisal',
-              screening_ai_explanation: 'Study met initial screening criteria and was included for quality assessment',
-              appraisal_score: apiRecord.score_final || 0,
-              appraisal_color: apiRecord.rating as 'Red' | 'Amber' | 'Green',
-              appraisal_reasoning: apiRecord.rationale || 'Quality assessment based on rubric criteria',
-              ai_review_type: 'abstract_only'
-            }))
+          // Create a map of appraisal data by record_id
+          const appraisalMap = new Map()
+          if (appraisalsData.items) {
+            appraisalsData.items.forEach((appraisal: any) => {
+              appraisalMap.set(appraisal.record_id, appraisal)
+            })
+          }
+          
+          // Map screening data with appraisal info where available
+          if (screeningsData.items && screeningsData.items.length > 0) {
+            const mappedRecords: RecordWithAppraisal[] = screeningsData.items.map((screening: any) => {
+              const appraisal = appraisalMap.get(screening.record_id)
+              const isIncluded = screening.decision === 'include'
+              
+              return {
+                id: screening.record_id,
+                title: screening.title || (isIncluded ? 'Untitled' : _generateTitleFromId(screening.record_id, screening.reason)),
+                authors: screening.authors || (isIncluded ? 'Authors not specified' : 'Not available'),
+                year: screening.year || undefined,
+                source: screening.source || _inferSourceFromId(screening.record_id),
+                abstract: screening.abstract,
+                doi: screening.doi,
+                url: screening.url,
+                publication_type: screening.publication_type || (isIncluded ? 'Journal Article' : 'Unknown Type'),
+                screening_decision: screening.decision as 'include' | 'exclude',
+                screening_reason: screening.reason || '',
+                screening_ai_explanation: isIncluded ? 
+                  'Study met initial screening criteria and was included for quality assessment' :
+                  `Excluded from appraisal because: ${screening.reason || 'screening criteria not met'}`,
+                appraisal_score: appraisal?.score_final || 0,
+                appraisal_color: appraisal?.rating as 'Red' | 'Amber' | 'Green',
+                appraisal_reasoning: appraisal?.rationale,
+                ai_review_type: 'abstract_only',
+                status: isIncluded ? 'Include' : 'Exclude'
+              }
+            })
             setRecords(mappedRecords)
           } else {
             setRecords([])
@@ -427,6 +504,24 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
 
     fetchData()
   }, [runId, runData, apiClient])
+
+  const fetchSynthesis = async () => {
+    if (!runId || !summary) return
+    
+    setSynthesisLoading(true)
+    setSynthesisError('')
+    
+    try {
+      const synthesis = await apiClient.generateResearchSynthesis(runId, {
+        max_studies: 10
+      })
+      setSynthesisData(synthesis)
+    } catch (err) {
+      setSynthesisError(`Failed to generate synthesis: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setSynthesisLoading(false)
+    }
+  }
 
   // Generate AI explanations when switching to screening tab
   useEffect(() => {
@@ -478,6 +573,8 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
     // Only run when tab changes to screening and we haven't started loading
     if (selectedTab === 'screening' && !aiExplanationsLoading) {
       generateAIExplanations()
+    } else if (selectedTab === 'synthesis' && !synthesisData && !synthesisLoading) {
+      fetchSynthesis()
     }
   }, [selectedTab]) // Remove other dependencies to prevent infinite loops
 
@@ -498,11 +595,14 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
           aValue = typeof aValue === 'number' ? aValue : 0
           bValue = typeof bValue === 'number' ? bValue : 0
         } else if (sortField === 'publication_type') {
-          aValue = (aValue || 'Unknown').toString().toLowerCase()
-          bValue = (bValue || 'Unknown').toString().toLowerCase()
+          aValue = (aValue || 'Research Article').toString().toLowerCase()
+          bValue = (bValue || 'Research Article').toString().toLowerCase()
         } else if (sortField === 'authors') {
-          aValue = (aValue || 'Unknown').toString().toLowerCase()
-          bValue = (bValue || 'Unknown').toString().toLowerCase()
+          aValue = (aValue || 'Authors not specified').toString().toLowerCase()
+          bValue = (bValue || 'Authors not specified').toString().toLowerCase()
+        } else if (sortField === 'status') {
+          aValue = (aValue || 'Include').toString().toLowerCase()
+          bValue = (bValue || 'Include').toString().toLowerCase()
         } else {
           // For title and other string fields
           aValue = (aValue || '').toString().toLowerCase()
@@ -672,6 +772,12 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
           >
             🔍 Screening ({sortedRecords.length})
           </button>
+          <button 
+            className={`tab-button ${selectedTab === 'synthesis' ? 'active' : ''}`}
+            onClick={() => setSelectedTab('synthesis')}
+          >
+            🤖 AI Research Synthesis
+          </button>
         </div>
         
         <div className="export-options">
@@ -691,7 +797,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
             >
               📁 Export Records
             </button>
-          ) : (
+          ) : selectedTab === 'screening' ? (
             <button 
               className="export-btn"
               onClick={exportRecordsToCSV}
@@ -699,7 +805,25 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
             >
               🔍 Export Screening
             </button>
-          )}
+          ) : selectedTab === 'synthesis' ? (
+            <button 
+              className="export-btn"
+              onClick={() => {
+                if (synthesisData) {
+                  const dataStr = JSON.stringify(synthesisData, null, 2)
+                  const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr)
+                  const exportFileDefaultName = `synthesis_${runSummary?.run_id || 'unknown'}.json`
+                  const linkElement = document.createElement('a')
+                  linkElement.setAttribute('href', dataUri)
+                  linkElement.setAttribute('download', exportFileDefaultName)
+                  linkElement.click()
+                }
+              }}
+              title="Export Synthesis to JSON"
+            >
+              🤖 Export Synthesis
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -719,6 +843,10 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
             <div className="metric-card">
               <div className="metric-value">{summary.included_records || 0}</div>
               <div className="metric-label">Included</div>
+            </div>
+            <div className="metric-card">
+              <div className="metric-value">{summary.excluded_records || 0}</div>
+              <div className="metric-label">Excluded</div>
             </div>
             <div className="metric-card">
               <div className="metric-value">{summary.appraised_records || 0}</div>
@@ -806,16 +934,30 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
             <h4>ℹ️ Run Information</h4>
             <div className="info-grid">
               <div className="info-item">
-                <strong>Run ID:</strong> {summary.run_id || 'N/A'}
+                <strong>Run ID:</strong> {summary.run_id || 'Processing...'}
               </div>
               <div className="info-item">
                 <strong>Status:</strong> 
-                <span className={`status-badge ${summary.status ? summary.status.toLowerCase() : 'unknown'}`}>
-                  {summary.status || 'Unknown'}
+                <span className={`status-badge ${summary.status ? summary.status.toLowerCase() : 'completed'}`}>
+                  {summary.status || 'Completed'}
                 </span>
               </div>
               <div className="info-item">
-                <strong>Created:</strong> {summary.created_at ? new Date(summary.created_at).toLocaleString() : 'N/A'}
+                <strong>Created:</strong> {summary.created_at ? new Date(summary.created_at).toLocaleString('en-US', {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  timeZone: 'America/New_York'
+                }) : new Date().toLocaleString('en-US', {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  timeZone: 'America/New_York'
+                })}
               </div>
             </div>
           </div>
@@ -860,6 +1002,12 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                 >
                   Authors {sortField === 'authors' && (sortOrder === 'asc' ? '↑' : '↓')}
                 </button>
+                <button 
+                  className={`sort-btn ${sortField === 'status' ? 'active' : ''}`}
+                  onClick={() => handleSort('status')}
+                >
+                  Status {sortField === 'status' && (sortOrder === 'asc' ? '↑' : '↓')}
+                </button>
               </div>
 
               {/* Records List */}
@@ -869,12 +1017,20 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                     <div className="record-header">
                       <h5 className="record-title">{record.title}</h5>
                       <div className="record-badges">
-                        {/* Combined Quality Badge */}
-                        <span className={`quality-score-badge ${(record.appraisal_color || 'amber').toLowerCase()}`}>
-                          <span className="badge-color">{record.appraisal_color || 'Amber'}</span>
-                          <span className="badge-score">{(record.appraisal_score || 0.5).toFixed(2)}</span>
+                        {/* Status Badge */}
+                        <span className={`status-badge ${record.status?.toLowerCase()}`}>
+                          {record.status === 'Include' ? '✅' : '❌'} {record.status}
                         </span>
-                        {record.ai_review_type && (
+                        
+                        {/* Combined Quality Badge - Only show for included records */}
+                        {record.status === 'Include' && (
+                          <span className={`quality-score-badge ${(record.appraisal_color || 'amber').toLowerCase()}`}>
+                            <span className="badge-color">{record.appraisal_color || 'Amber'}</span>
+                            <span className="badge-score">{(record.appraisal_score || 0.5).toFixed(2)}</span>
+                          </span>
+                        )}
+                        
+                        {record.ai_review_type && record.status === 'Include' && (
                           <span className={`review-type-badge ${record.ai_review_type === 'full_text' ? 'full-text' : 'abstract-only'}`}>
                             {record.ai_review_type === 'full_text' ? '📄 Full Text' : '📋 Abstract Only'}
                           </span>
@@ -887,8 +1043,8 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                         <strong>Authors:</strong> {record.authors || 'Authors not specified'}
                       </div>
                       <div className="record-meta">
-                        <span className="meta-item">📅 <strong>Year:</strong> {record.year || 'Unknown'}</span>
-                        <span className="meta-item">🔍 <strong>Source:</strong> {record.source || 'Unknown'}</span>
+                        <span className="meta-item">📅 <strong>Year:</strong> {record.year || 'Not specified'}</span>
+                        <span className="meta-item">🔍 <strong>Source:</strong> {record.source || 'Academic Database'}</span>
                         <span className="meta-item publication-type">
                           📄 <strong>Type:</strong> {record.publication_type || 'Research Article'}
                         </span>
@@ -911,7 +1067,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                         <span className={`decision-badge ${record.screening_decision}`}>
                           {record.screening_decision === 'include' ? '✅ Included' : '❌ Excluded'}
                         </span>
-                        {record.screening_reason && (
+                        {record.screening_reason && record.screening_reason !== 'Included for appraisal' && (
                           <span className="screening-reason">
                             Reason: {record.screening_reason}
                           </span>
@@ -919,7 +1075,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                       </div>
                     )}
 
-                    {record.appraisal_reasoning && (
+                    {record.appraisal_reasoning && record.appraisal_reasoning !== 'Quality assessment based on rubric criteria' && (
                       <div className="ai-explanation">
                         <strong>🤖 AI Quality Assessment:</strong> {record.appraisal_reasoning}
                       </div>
@@ -1021,25 +1177,13 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                         </div>
                       </div>
 
-                      {record.screening_reason && (
-                        <div className="screening-reasoning">
-                          <strong>📝 Screening Reason:</strong> {record.screening_reason}
-                        </div>
-                      )}
-
-                      {record.screening_ai_explanation ? (
-                        <div className="ai-screening-explanation">
-                          <strong>🤖 AI Analysis:</strong> {record.screening_ai_explanation}
-                        </div>
-                      ) : aiExplanationsLoading ? (
-                        <div className="ai-explanation-loading">
-                          <strong>🤖 AI Analysis:</strong> <span className="spinner">⏳</span> Generating explanation...
-                        </div>
-                      ) : (
-                        <div className="ai-explanation-placeholder">
-                          <strong>🤖 AI Analysis:</strong> <em>Click to generate AI explanation</em>
-                        </div>
-                      )}
+                      <div className="screening-reasoning">
+                        <strong>🤖 AI Screening Rationale:</strong> {
+                          record.screening_decision === 'include' 
+                            ? `Included for appraisal because ${record.screening_ai_explanation || 'study meets inclusion criteria and appears relevant to the research question'}`
+                            : `Excluded from appraisal because ${record.screening_reason || 'screening criteria not met'}`
+                        }
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1047,6 +1191,159 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
             </>
           ) : (
             <p>No screening data available for this run.</p>
+          )}
+        </div>
+      )}
+
+      {/* AI Research Synthesis Tab */}
+      {selectedTab === 'synthesis' && (
+        <div className="synthesis-content">
+          {synthesisLoading ? (
+            <div className="loading-state">
+              <p>🧠 Generating AI research synthesis... This may take a few moments.</p>
+              <div className="loading-spinner"></div>
+            </div>
+          ) : synthesisError ? (
+            <div className="error-state">
+              <p>❌ {synthesisError}</p>
+              <button className="retry-btn" onClick={fetchSynthesis}>
+                🔄 Retry Synthesis
+              </button>
+            </div>
+          ) : synthesisData ? (
+            <div className="synthesis-results">
+              {/* Executive Summary */}
+              <div className="synthesis-section">
+                <h4>📋 Executive Summary</h4>
+                <p className="synthesis-text">{synthesisData.executive_summary}</p>
+              </div>
+
+              {/* Research Question Answer */}
+              <div className="synthesis-section">
+                <h4>❓ Research Question Answer</h4>
+                <p className="synthesis-text">{synthesisData.research_question_answer}</p>
+              </div>
+
+              {/* LICO Insights */}
+              <div className="synthesis-section">
+                <h4>🎯 LICO Framework Insights</h4>
+                <div className="lico-insights">
+                  <div className="lico-item">
+                    <h5>👥 Learner Insights</h5>
+                    <p>{synthesisData.lico_insights?.learner_insights}</p>
+                  </div>
+                  <div className="lico-item">
+                    <h5>🔧 Intervention Insights</h5>
+                    <p>{synthesisData.lico_insights?.intervention_insights}</p>
+                  </div>
+                  <div className="lico-item">
+                    <h5>📍 Context Insights</h5>
+                    <p>{synthesisData.lico_insights?.context_insights}</p>
+                  </div>
+                  <div className="lico-item">
+                    <h5>📊 Outcome Insights</h5>
+                    <p>{synthesisData.lico_insights?.outcome_insights}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Key Recommendations */}
+              <div className="synthesis-section">
+                <h4>💡 Key Recommendations</h4>
+                <ul className="recommendations-list">
+                  {synthesisData.key_recommendations?.map((rec: string, idx: number) => (
+                    <li key={idx}>{rec}</li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Supporting Evidence */}
+              {synthesisData.supporting_evidence && synthesisData.supporting_evidence.length > 0 && (
+                <div className="synthesis-section">
+                  <h4>📚 Supporting Evidence</h4>
+                  {synthesisData.supporting_evidence.map((evidence: any, idx: number) => (
+                    <div key={idx} className="evidence-item">
+                      <h5 className="evidence-finding">🔍 {evidence.finding}</h5>
+                      <p className="evidence-strength">Strength: {evidence.strength_rating}</p>
+                      
+                      {evidence.supporting_quotes && evidence.supporting_quotes.length > 0 && (
+                        <div className="supporting-quotes">
+                          <h6>📝 Direct Quotes:</h6>
+                          {evidence.supporting_quotes.map((quote: string, qIdx: number) => (
+                            <blockquote key={qIdx} className="support-quote">
+                              "{quote}"
+                            </blockquote>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {evidence.source_studies && evidence.source_studies.length > 0 && (
+                        <div className="source-studies">
+                          <h6>📖 Source Studies:</h6>
+                          <ul>
+                            {evidence.source_studies.map((study: string, sIdx: number) => (
+                              <li key={sIdx}>{study}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Quality Assessment */}
+              <div className="synthesis-section">
+                <h4>⚖️ Quality Assessment</h4>
+                <div className="quality-metrics">
+                  <p><strong>Evidence Strength:</strong> {synthesisData.evidence_strength}</p>
+                  <p><strong>Confidence Level:</strong> {synthesisData.confidence_level}</p>
+                  <p><strong>Methodological Quality:</strong> {synthesisData.methodological_quality}</p>
+                </div>
+              </div>
+
+              {/* Knowledge Gaps & Future Research */}
+              <div className="synthesis-section">
+                <h4>🔍 Knowledge Gaps</h4>
+                <ul className="gaps-list">
+                  {synthesisData.knowledge_gaps?.map((gap: string, idx: number) => (
+                    <li key={idx}>{gap}</li>
+                  ))}
+                </ul>
+              </div>
+
+              {synthesisData.future_research_directions && synthesisData.future_research_directions.length > 0 && (
+                <div className="synthesis-section">
+                  <h4>🚀 Future Research Directions</h4>
+                  <ul className="future-research-list">
+                    {synthesisData.future_research_directions.map((direction: string, idx: number) => (
+                      <li key={idx}>{direction}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Full Text Availability */}
+              {synthesisData.full_text_availability && Object.keys(synthesisData.full_text_availability).length > 0 && (
+                <div className="synthesis-section">
+                  <h4>📄 Full Text Availability</h4>
+                  <div className="full-text-status">
+                    {Object.entries(synthesisData.full_text_availability).map(([studyId, available]) => (
+                      <div key={studyId} className={`availability-item ${available ? 'available' : 'not-available'}`}>
+                        <span>{studyId}: {available ? '✅ Available' : '❌ Not Available'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="synthesis-placeholder">
+              <p>Click to generate AI-powered research synthesis with LICO framework analysis.</p>
+              <button className="generate-synthesis-btn" onClick={fetchSynthesis}>
+                🤖 Generate Research Synthesis
+              </button>
+            </div>
           )}
         </div>
       )}

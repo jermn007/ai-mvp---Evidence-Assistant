@@ -107,10 +107,25 @@ async def pubmed_search_async(term: str, max_n: int = 25) -> List[Dict]:
         eloc = item.get("elocationid") or ""
         if isinstance(eloc, str) and eloc.lower().startswith("doi:"):
             doi = eloc.split(":", 1)[1].strip()
+        
+        # Extract authors from the ESummary response
+        authors = []
+        if "authors" in item and isinstance(item["authors"], list):
+            for author in item["authors"]:
+                if isinstance(author, dict) and "name" in author:
+                    authors.append(author["name"])
+        elif "authorlist" in item and isinstance(item["authorlist"], list):
+            # Alternative format
+            for author in item["authorlist"]:
+                if isinstance(author, dict) and "name" in author:
+                    authors.append(author["name"])
+        authors_str = ", ".join(authors) if authors else None
+        
         out.append({
             "record_id": f"pmid:{pmid}",
             "title": title,
             "abstract": None,
+            "authors": authors_str,
             "year": year,
             "doi": doi,
             "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
@@ -144,10 +159,25 @@ async def crossref_search_async(term: str, max_n: int = 25, mailto: Optional[str
             pass
         doi = it.get("DOI")
         url = it.get("URL")
+        
+        # Extract authors from Crossref response
+        authors = []
+        if "author" in it and isinstance(it["author"], list):
+            for author in it["author"]:
+                if isinstance(author, dict):
+                    given = author.get("given", "")
+                    family = author.get("family", "")
+                    if given and family:
+                        authors.append(f"{given} {family}")
+                    elif family:
+                        authors.append(family)
+        authors_str = ", ".join(authors) if authors else None
+        
         out.append({
             "record_id": f"doi:{doi}" if doi else f"cr:{url}",
             "title": title,
             "abstract": it.get("abstract"),
+            "authors": authors_str,
             "year": year,
             "doi": doi,
             "url": url,
@@ -203,10 +233,19 @@ async def arxiv_search_async(query: str, max_n: int = 25) -> List[Dict[str, Any]
         if not arxiv_id or not title:
             continue
 
+        # Extract authors from arXiv XML
+        authors = []
+        for author in entry.findall("atom:author", ns):
+            name = author.findtext("atom:name", namespaces=ns)
+            if name:
+                authors.append(name.strip())
+        authors_str = ", ".join(authors) if authors else None
+
         out.append({
             "record_id": f"arxiv:{arxiv_id}",
             "title": title,
             "abstract": summary,
+            "authors": authors_str,
             "year": year,
             "doi": doi,
             "url": url_final,
@@ -264,12 +303,32 @@ async def eric_search_async(query: str, max_n: int = 25, api_base: str | None = 
             or d.get("URL")
             or (f"https://eric.ed.gov/?id={ext}" if ext else None)
         )
+        
+        # Extract authors from ERIC response
+        authors = []
+        author_field = (
+            d.get("authors") or d.get("Authors") or 
+            d.get("author") or d.get("Author") or
+            d.get("AuthorContact") or []
+        )
+        if isinstance(author_field, list):
+            for author in author_field:
+                if isinstance(author, str):
+                    authors.append(author.strip())
+                elif isinstance(author, dict) and "name" in author:
+                    authors.append(author["name"].strip())
+        elif isinstance(author_field, str):
+            # Handle comma-separated authors
+            authors = [a.strip() for a in author_field.split(",") if a.strip()]
+        authors_str = ", ".join(authors) if authors else None
+        
         if not ext or not title:
             continue
         out.append({
             "record_id": f"eric:{ext}",
             "title": title,
             "abstract": abstract,
+            "authors": authors_str,
             "year": year,
             "doi": doi,
             "url": url,
@@ -285,7 +344,7 @@ async def s2_search_async(query: str, max_n: int = 25) -> List[Dict[str, Any]]:
     If S2_REQUIRE_KEY=true and key missing -> skip (return []).
     """
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
-    fields = "title,year,abstract,externalIds,url"
+    fields = "title,year,abstract,externalIds,url,authors"
     params = {"query": query, "limit": max_n, "fields": fields}
     headers = {}
     api_key = os.getenv("S2_API_KEY")
@@ -318,12 +377,21 @@ async def s2_search_async(query: str, max_n: int = 25) -> List[Dict[str, Any]]:
         url_final = p.get("url") or (f"https://doi.org/{doi}" if doi else None)
         year = p.get("year") if isinstance(p.get("year"), int) else None
         abstract = p.get("abstract")
+        
+        # Extract authors from Semantic Scholar response
+        authors = []
+        if "authors" in p and isinstance(p["authors"], list):
+            for author in p["authors"]:
+                if isinstance(author, dict) and "name" in author:
+                    authors.append(author["name"])
+        authors_str = ", ".join(authors) if authors else None
 
         rid = f"doi:{doi}" if doi else (f"s2:{s2id}" if s2id else "s2:" + hashlib.md5(title.encode("utf-8")).hexdigest())
         out.append({
             "record_id": rid,
             "title": title,
             "abstract": abstract,
+            "authors": authors_str,
             "year": year,
             "doi": doi,
             "url": url_final,
@@ -366,11 +434,27 @@ async def scholar_serpapi_async(query: str, max_n: int = 25, year_min: int | Non
 
         if not title or not link:
             continue
+        
+        # Extract authors from Google Scholar response
+        authors_str = None
+        pub_info = r.get("publication_info", {})
+        if isinstance(pub_info, dict):
+            authors_field = pub_info.get("authors") or pub_info.get("summary", "")
+            if authors_field and isinstance(authors_field, str):
+                # Extract authors from "Author1, Author2 - Journal, 2023" format
+                parts = authors_field.split(" - ")
+                if len(parts) > 1:
+                    potential_authors = parts[0].strip()
+                    # Remove common non-author prefixes
+                    if not any(word in potential_authors.lower() for word in ["cited by", "related", "versions"]):
+                        authors_str = potential_authors
+        
         rid = "scholar:" + hashlib.md5(link.encode("utf-8")).hexdigest()
         out.append({
             "record_id": rid,
             "title": title,
             "abstract": snippet,
+            "authors": authors_str,
             "year": year,
             "doi": None,
             "url": link,

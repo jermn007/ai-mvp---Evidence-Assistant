@@ -10,9 +10,10 @@ import './PressPlanner.css'
 interface PressPlannerProps {
   apiClient: ApiClient
   aiAvailable: boolean
+  onRunComplete?: (runId: string, runData?: any) => void
 }
 
-export function PressPlanner({ apiClient, aiAvailable }: PressPlannerProps) {
+export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPlannerProps) {
   const [lico, setLico] = useState<LICO>({
     learner: '',
     intervention: '',
@@ -173,6 +174,11 @@ export function PressPlanner({ apiClient, aiAvailable }: PressPlannerProps) {
       console.log('Run execution started:', result)
       setRunResult(result)
       setError(`✅ Literature review started successfully! Run ID: ${result.run_id}`)
+      
+      // Notify parent component about the completed run
+      if (onRunComplete && result.run_id) {
+        onRunComplete(result.run_id, result)
+      }
     } catch (err) {
       console.error('Run execution failed:', err)
       setError(`Run execution failed: ${err instanceof Error ? err.message : 'Unknown error'}`)

@@ -13,10 +13,12 @@ class RecordModel(BaseModel):
     record_id: str
     title: str
     abstract: Optional[str] = None
+    authors: Optional[str] = None  # Comma-separated author names
     year: Optional[int] = None
     doi: Optional[str] = None
     url: Optional[str] = None
     source: str
+    publication_type: Optional[str] = None  # Journal Article, Conference Paper, etc.
 
 class Criteria(BaseModel):
     include: List[str] = []

@@ -41,6 +41,7 @@ from app.models import PressPlan
 from app.press_contract import LICO, DatabaseSpec, PressPlanResponse, PressStrategy, StrategyLine
 from app.press_hits import fill_hits_for_pubmed, _expand_lines_to_queries
 from app.ai_service import get_ai_service, LICOEnhancement, PressStrategyAnalysis, StudyRelevanceAssessment
+from app.research_synthesizer import extract_study_findings, synthesize_research, ResearchSynthesis
 
 # --- DB compatibility layer (works with async or sync app.db) -----------------
 _db = importlib.import_module("app.db")
@@ -436,8 +437,8 @@ async def export_appraisals_csv(run_id: str):
 # ======================= Joined export: records + appraisals ==================
 
 JOIN_COLS = [
-    "record_id", "title", "abstract", "year", "doi", "url", "source",
-    "rating", "score_final", "rationale", "run_id"
+    "record_id", "title", "abstract", "authors", "year", "doi", "url", "source", 
+    "publication_type", "rating", "score_final", "rationale", "run_id"
 ]
 
 @app.get("/runs/{run_id}/records_with_appraisals.json")
@@ -446,10 +447,12 @@ async def export_records_with_appraisals_json(run_id: str):
         Record.id.label("record_id"),
         Record.title,
         Record.abstract,
+        Record.authors,
         Record.year,
         Record.doi,
         Record.url,
         case((Record.source == "Scholar", "GoogleScholar"), else_=Record.source).label("source"),
+        Record.publication_type,
         Appraisal.rating,
         Appraisal.score_final,
         Appraisal.rationale,
@@ -468,10 +471,12 @@ async def export_records_with_appraisals_csv(run_id: str):
         Record.id.label("record_id"),
         Record.title,
         Record.abstract,
+        Record.authors,
         Record.year,
         Record.doi,
         Record.url,
         case((Record.source == "Scholar", "GoogleScholar"), else_=Record.source).label("source"),
+        Record.publication_type,
         Appraisal.rating,
         Appraisal.score_final,
         Appraisal.rationale,
@@ -566,10 +571,12 @@ async def export_records_with_appraisals_page(
         R.id.label("record_id"),
         R.title,
         R.abstract,
+        R.authors,
         R.year,
         R.doi,
         R.url,
         R.source,
+        R.publication_type,
         A.rating,
         A.score_final,
         A.rationale,
@@ -1568,6 +1575,83 @@ async def ai_enhance_research_question(request: ResearchQuestionRequest):
         raise HTTPException(status_code=500, detail=f"Failed to enhance research question: {str(e)}")
 
 
+class ResearchSynthesisRequest(BaseModel):
+    """Request model for research synthesis"""
+    research_question: Optional[str] = None
+    lico_components: Optional[dict] = None
+    include_fulltext: bool = True
+    max_studies: int = 50
+
+@app.post("/runs/{run_id}/synthesis", response_model=ResearchSynthesis)
+def generate_research_synthesis(run_id: str, request: ResearchSynthesisRequest):
+    """
+    Generate comprehensive AI research synthesis for a literature review run.
+    Analyzes all appraised studies, retrieves full text when available,
+    and provides evidence-based answers to LICO research questions.
+    """
+    try:
+        # Use synchronous database access to avoid async issues
+        from app.db import get_session
+        from sqlalchemy import text
+        
+        with get_session() as db:
+            # Get records with appraisals using a simple query
+            query = text("""
+                SELECT 
+                    r.id as record_id,
+                    r.title,
+                    r.abstract,
+                    r.authors,
+                    r.year,
+                    r.doi,
+                    r.url,
+                    r.source,
+                    r.publication_type,
+                    a.rating as appraisal_color,
+                    a.score_final as appraisal_score,
+                    a.rationale as appraisal_reasoning,
+                    r.run_id
+                FROM records r
+                LEFT JOIN appraisals a ON r.id = a.record_id
+                WHERE r.run_id = :run_id AND a.run_id = :run_id
+                ORDER BY COALESCE(a.score_final, 0) DESC
+                LIMIT :max_studies
+            """)
+            
+            result = db.execute(query, {
+                "run_id": run_id, 
+                "max_studies": request.max_studies
+            })
+            
+            records_data = [dict(row._mapping) for row in result]
+        
+        if not records_data:
+            raise HTTPException(status_code=404, detail=f"No appraised records found for run {run_id}")
+        
+        # Get research question from request or default
+        research_question = request.research_question or "What does the evidence tell us about medical education interventions and their effectiveness?"
+        
+        logger.info(f"Starting research synthesis for run {run_id} with {len(records_data)} studies")
+        
+        # Extract study findings with full-text retrieval
+        findings = extract_study_findings(records_data, retrieve_fulltext=request.include_fulltext)
+        
+        # Generate comprehensive synthesis
+        synthesis = synthesize_research(
+            findings=findings,
+            original_question=research_question,
+            lico_components=request.lico_components
+        )
+        
+        logger.info(f"Research synthesis completed for run {run_id}")
+        return synthesis
+        
+    except Exception as e:
+        logger.error(f"Research synthesis failed for run {run_id}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate research synthesis: {str(e)}")
+
 @app.get("/ai/status")
 async def ai_status():
     """Check AI service availability and configuration."""
@@ -1580,6 +1664,102 @@ async def ai_status():
             "PRESS strategy analysis", 
             "Study relevance assessment",
             "Quality rationale generation",
-            "Smart template selection"
+            "Smart template selection",
+            "Research synthesis with full-text retrieval"
         ] if ai_service.is_available() else []
     }
+
+@app.get("/test/synthesis-imports")
+async def test_synthesis_imports():
+    """Test endpoint to debug synthesis import issues."""
+    try:
+        from app.research_synthesizer import extract_study_findings, synthesize_research, ResearchSynthesis
+        return {"status": "success", "message": "All synthesis imports working"}
+    except Exception as e:
+        return {"status": "error", "message": f"Import failed: {str(e)}"}
+
+@app.post("/test/minimal-synthesis/{run_id}")
+def test_minimal_synthesis(run_id: str):
+    """Minimal synthesis endpoint for debugging"""
+    try:
+        from app.research_synthesizer import ResearchSynthesis, LICOInsights, EvidenceSupport
+        
+        # Return a minimal valid response
+        return ResearchSynthesis(
+            executive_summary="This is a test synthesis response.",
+            research_question_answer="Test answer to research question.",
+            lico_insights=LICOInsights(
+                learner_insights="Test learner insights",
+                intervention_insights="Test intervention insights", 
+                context_insights="Test context insights",
+                outcome_insights="Test outcome insights"
+            ),
+            evidence_strength="Limited",
+            confidence_level="Low",
+            key_recommendations=["Test recommendation"],
+            knowledge_gaps=["Test gap"],
+            methodological_quality="Test quality",
+            future_research_directions=["Test direction"],
+            supporting_evidence=[],
+            full_text_availability={}
+        )
+    except Exception as e:
+        logger.error(f"Minimal synthesis test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Minimal synthesis failed: {str(e)}")
+
+@app.post("/test/real-synthesis/{run_id}")
+def test_real_synthesis(run_id: str):
+    """Real AI synthesis using actual research data"""
+    try:
+        from app.db import get_session
+        from sqlalchemy import text
+        from app.research_synthesizer import extract_study_findings, synthesize_research
+        
+        with get_session() as db:
+            # Get records with appraisals using a simple query
+            query = text("""
+                SELECT 
+                    r.id as record_id,
+                    r.title,
+                    r.abstract,
+                    r.authors,
+                    r.year,
+                    r.doi,
+                    r.url,
+                    r.source,
+                    r.publication_type,
+                    a.rating as appraisal_color,
+                    a.score_final as appraisal_score,
+                    a.rationale as appraisal_reasoning,
+                    r.run_id
+                FROM records r
+                LEFT JOIN appraisals a ON r.id = a.record_id
+                WHERE r.run_id = :run_id AND a.run_id = :run_id
+                ORDER BY COALESCE(a.score_final, 0) DESC
+                LIMIT 10
+            """)
+            
+            result = db.execute(query, {"run_id": run_id})
+            records_data = [dict(row._mapping) for row in result]
+        
+        if not records_data:
+            raise HTTPException(status_code=404, detail=f"No appraised records found for run {run_id}")
+        
+        # Extract study findings and generate synthesis
+        findings = extract_study_findings(records_data, retrieve_fulltext=False)
+        
+        synthesis = synthesize_research(
+            findings=findings,
+            original_question="What does the evidence tell us about medical education interventions and their effectiveness in improving learning outcomes?",
+            lico_components=None
+        )
+        
+        return synthesis
+        
+    except Exception as e:
+        logger.error(f"Real synthesis failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate real synthesis: {str(e)}")

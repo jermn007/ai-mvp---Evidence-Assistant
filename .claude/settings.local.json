@@ -14,7 +14,12 @@
       "Bash(python:*)",
       "Bash(streamlit run:*)",
       "Bash(npm run dev:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(alembic revision:*)",
+      "Bash(PYTHONPATH=. alembic revision --autogenerate -m \"add authors and publication_type to records\")",
+      "Bash(PYTHONPATH=. alembic stamp head)",
+      "Bash(pkill:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

@@ -53,10 +53,12 @@ def persist_run(state: Dict[str, Any]) -> str:
                     run_id=run.id,
                     title=_get_attr(r, "title", "") or "",
                     abstract=_get_attr(r, "abstract"),
+                    authors=_get_attr(r, "authors"),
                     year=_get_attr(r, "year"),
                     doi=_get_attr(r, "doi"),
                     url=_get_attr(r, "url"),
                     source=_get_attr(r, "source", "") or "",
+                    publication_type=_get_attr(r, "publication_type"),
                 )
             )
 
@@ -77,10 +79,12 @@ def persist_run(state: Dict[str, Any]) -> str:
                             run_id=run.id,
                             title="",
                             abstract=None,
+                            authors=None,
                             year=None,
                             doi=None,
                             url=None,
                             source="",
+                            publication_type=None,
                         )
                     )
                     minimal_created[db_rec_id] = True

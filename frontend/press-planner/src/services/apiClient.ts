@@ -47,6 +47,34 @@ export interface AiEnhancedPlan {
   ai_error?: string
 }
 
+export interface LICOInsights {
+  learner_insights: string
+  intervention_insights: string
+  context_insights: string
+  outcome_insights: string
+}
+
+export interface EvidenceSupport {
+  finding: string
+  supporting_quotes: string[]
+  source_studies: string[]
+  strength_rating: string
+}
+
+export interface ResearchSynthesis {
+  executive_summary: string
+  research_question_answer: string
+  lico_insights: LICOInsights
+  evidence_strength: string
+  confidence_level: string
+  key_recommendations: string[]
+  knowledge_gaps: string[]
+  methodological_quality: string
+  future_research_directions: string[]
+  supporting_evidence: EvidenceSupport[]
+  full_text_availability: Record<string, boolean>
+}
+
 export class ApiClient {
   private baseUrl: string
 
@@ -194,6 +222,24 @@ export class ApiClient {
   async getRecordsWithAppraisals(runId: string, params?: Record<string, any>): Promise<any> {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : ''
     return this.request(`/runs/${runId}/records_with_appraisals.page.json${queryString}`)
+  }
+
+  async getScreeningsWithRecords(runId: string, params?: Record<string, any>): Promise<any> {
+    const queryString = params ? '?' + new URLSearchParams(params).toString() : ''
+    return this.request(`/runs/${runId}/screenings_with_records.page.json${queryString}`)
+  }
+
+  // AI Research Synthesis
+  async generateResearchSynthesis(runId: string, options?: {
+    research_question?: string
+    focus_areas?: string[]
+    max_studies?: number
+  }): Promise<ResearchSynthesis> {
+    // Use real AI synthesis endpoint with actual research data
+    return this.request<ResearchSynthesis>(`/test/real-synthesis/${runId}`, {
+      method: 'POST',
+      body: JSON.stringify(options || {})
+    })
   }
 }
 

@@ -13,6 +13,7 @@ from app.models import (
 )
 from app.rubric import Rubric
 from app.ai_service import get_ai_service
+from app.publication_classifier import batch_classify_publications
 from app.sources import (
     pubmed_search_async, crossref_search_async, arxiv_search_async, eric_search_async,
     s2_search_async, scholar_serpapi_async,
@@ -132,6 +133,26 @@ def harvest(state):
         except Exception:
             pass
     filtered = [r for r in filtered_seen if year_min is None or (r.get("year") or 0) >= year_min]
+
+    # Add AI-powered publication type classification
+    try:
+        logger.info("harvest: classifying publication types for %d records", len(filtered))
+        classifications = batch_classify_publications(filtered)
+        
+        # Apply classifications to records
+        for record in filtered:
+            record_id = record.get("record_id", "")
+            if record_id in classifications:
+                record["publication_type"] = classifications[record_id]
+            else:
+                record["publication_type"] = "Unknown"
+        
+        logger.info("harvest: publication type classification completed")
+    except Exception as e:
+        logger.warning(f"harvest: publication type classification failed: {e}")
+        # Set fallback publication types
+        for record in filtered:
+            record["publication_type"] = "Unknown"
 
     # Validate to models
     state["records"] = [RecordModel.model_validate(r) for r in filtered]
