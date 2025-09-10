@@ -1,0 +1,115 @@
+# Configuration for AI MVP Evidence Assistant
+
+# Deduplication settings
+deduplication:
+  # Title similarity threshold (0-100) for fuzzy matching
+  title_similarity_threshold: 96
+  
+  # DOI/ID exact matching (always enabled)
+  use_exact_matching: true
+  
+  # Additional deduplication strategies
+  strategies:
+    # Check abstract similarity for records without DOI
+    abstract_similarity: 
+      enabled: false
+      threshold: 85
+    
+    # Check author similarity
+    author_similarity:
+      enabled: false  
+      threshold: 90
+
+# Metadata fields configuration
+metadata:
+  # Core fields (always included)
+  core_fields:
+    - record_id
+    - title
+    - abstract
+    - authors
+    - year
+    - doi
+    - url
+    - source
+    - publication_type
+  
+  # Extended metadata fields to harvest when available
+  extended_fields:
+    # Publication venue information
+    - journal
+    - conference
+    - publisher
+    - volume
+    - issue
+    - pages
+    
+    # Language and location
+    - language
+    - country
+    
+    # Additional identifiers
+    - pmid         # PubMed ID
+    - arxiv_id     # arXiv identifier
+    - issn         # Journal ISSN
+    - isbn         # Book ISBN
+    
+    # Subject classification
+    - subjects     # Subject headings/keywords
+    - mesh_terms   # Medical Subject Headings
+    
+    # Full-text availability
+    - pdf_url      # Direct PDF URL
+    - fulltext_url # Full-text HTML URL
+    - open_access  # Open access status
+    
+    # Citation information
+    - cited_by_count
+    - reference_count
+
+# Search configuration
+search:
+  # Maximum results per source
+  max_results_per_source: 25
+  
+  # Timeout settings (seconds)
+  request_timeout: 30
+  
+  # Rate limiting
+  rate_limit:
+    requests_per_second: 5
+    burst_size: 10
+
+# Screening configuration  
+screening:
+  # AI-powered screening settings
+  use_ai_screening: true
+  
+  # Inclusion criteria matching
+  inclusion_threshold: 0.7  # Confidence threshold for inclusion
+  
+  # Custom screening prompts
+  screening_prompt_template: |
+    Based on the following research question and inclusion criteria, 
+    determine if this paper should be included in the systematic review.
+    
+    Research Question: {query}
+    
+    Paper Title: {title}
+    Abstract: {abstract}
+    
+    Include this paper? (yes/no) and provide reasoning.
+
+# Appraisal configuration
+appraisal:
+  # Use AI for generating rationales
+  use_ai_rationale: true
+  
+  # Quality assessment rubric file
+  rubric_file: "rubric.yaml"
+  
+  # Minimum scores for quality levels
+  quality_thresholds:
+    red_max: 0.54
+    amber_min: 0.55
+    green_min: 0.75

@@ -8,7 +8,7 @@ import os
 import logging
 import requests
 import tempfile
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Any
 from dataclasses import dataclass
 import re
 from urllib.parse import urlparse
@@ -60,7 +60,7 @@ class FullTextRetriever:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
         
-    def retrieve_fulltext(self, record: Dict[str, any]) -> FullTextContent:
+    def retrieve_fulltext(self, record: Dict[str, Any]) -> FullTextContent:
         """Attempt to retrieve full text for a record"""
         record_id = record.get('record_id', 'unknown')
         title = record.get('title', 'Unknown')
@@ -141,7 +141,11 @@ class FullTextRetriever:
                 result = self._download_and_extract_pdf(record_id, title, pdf_url)
                 if result and result.extraction_success:
                     return result
-            except:
+            except (requests.RequestException, IOError, OSError) as e:
+                logger.warning(f"PDF download failed for {pdf_url}: {e}")
+                continue
+            except Exception as e:
+                logger.warning(f"Unexpected error processing PDF {pdf_url}: {e}")
                 continue
                 
         return None
@@ -174,9 +178,22 @@ class FullTextRetriever:
             return None
         
         try:
-            # Download PDF
-            response = self.session.get(pdf_url, timeout=30)
+            # Download PDF with proper error handling
+            logger.debug(f"Downloading PDF from: {pdf_url}")
+            response = self.session.get(pdf_url, timeout=30, stream=True)
             response.raise_for_status()
+            
+            # Validate content type
+            content_type = response.headers.get('content-type', '').lower()
+            if 'pdf' not in content_type and len(response.content) < 1024:
+                logger.warning(f"Invalid PDF content from {pdf_url}, content-type: {content_type}")
+                return None
+            
+            # Check file size (reasonable limits)
+            content_length = response.headers.get('content-length')
+            if content_length and int(content_length) > 50_000_000:  # 50MB limit
+                logger.warning(f"PDF file too large ({content_length} bytes) from {pdf_url}")
+                return None
             
             # Save to temporary file
             with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
@@ -185,10 +202,22 @@ class FullTextRetriever:
             
             try:
                 # Extract text using best available method
-                if PDFPLUMBER_AVAILABLE:
-                    full_text = self._extract_text_pdfplumber(tmp_path)
-                else:
-                    full_text = self._extract_text_pypdf2(tmp_path)
+                full_text = ""
+                try:
+                    if PDFPLUMBER_AVAILABLE:
+                        full_text = self._extract_text_pdfplumber(tmp_path)
+                    else:
+                        full_text = self._extract_text_pypdf2(tmp_path)
+                except Exception as e:
+                    logger.warning(f"PDF text extraction failed for {tmp_path}: {e}")
+                    # Try fallback method if available
+                    if PDFPLUMBER_AVAILABLE and PDF_AVAILABLE:
+                        try:
+                            logger.info("Trying fallback PDF extraction method")
+                            full_text = self._extract_text_pypdf2(tmp_path)
+                        except Exception as e2:
+                            logger.warning(f"Fallback PDF extraction also failed: {e2}")
+                            return None
                 
                 if full_text and len(full_text.strip()) > 100:
                     key_passages = self._extract_key_passages(full_text)
@@ -206,8 +235,8 @@ class FullTextRetriever:
                 # Clean up temp file
                 try:
                     os.unlink(tmp_path)
-                except:
-                    pass
+                except (OSError, PermissionError) as e:
+                    logger.debug(f"Could not delete temporary file {tmp_path}: {e}")
                     
         except Exception as e:
             logger.warning(f"PDF download/extraction failed for {pdf_url}: {e}")
@@ -219,11 +248,23 @@ class FullTextRetriever:
         import pdfplumber
         
         text_content = []
-        with pdfplumber.open(pdf_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    text_content.append(text)
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                if not pdf.pages:
+                    logger.warning(f"PDF has no pages: {pdf_path}")
+                    return ""
+                
+                for i, page in enumerate(pdf.pages):
+                    try:
+                        text = page.extract_text()
+                        if text and text.strip():
+                            text_content.append(text.strip())
+                    except Exception as e:
+                        logger.warning(f"Failed to extract text from page {i+1} of {pdf_path}: {e}")
+                        continue
+        except Exception as e:
+            logger.error(f"Failed to open PDF with pdfplumber {pdf_path}: {e}")
+            raise
         
         return '\n\n'.join(text_content)
     
@@ -232,12 +273,25 @@ class FullTextRetriever:
         import PyPDF2
         
         text_content = []
-        with open(pdf_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            for page in pdf_reader.pages:
-                text = page.extract_text()
-                if text:
-                    text_content.append(text)
+        try:
+            with open(pdf_path, 'rb') as file:
+                pdf_reader = PyPDF2.PdfReader(file)
+                
+                if not pdf_reader.pages:
+                    logger.warning(f"PDF has no pages: {pdf_path}")
+                    return ""
+                
+                for i, page in enumerate(pdf_reader.pages):
+                    try:
+                        text = page.extract_text()
+                        if text and text.strip():
+                            text_content.append(text.strip())
+                    except Exception as e:
+                        logger.warning(f"Failed to extract text from page {i+1} of {pdf_path}: {e}")
+                        continue
+        except Exception as e:
+            logger.error(f"Failed to open PDF with PyPDF2 {pdf_path}: {e}")
+            raise
         
         return '\n\n'.join(text_content)
     

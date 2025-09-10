@@ -19,7 +19,10 @@
       "Bash(PYTHONPATH=. alembic revision --autogenerate -m \"add authors and publication_type to records\")",
       "Bash(PYTHONPATH=. alembic stamp head)",
       "Bash(pkill:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(set PYTHONPATH=%CD%)",
+      "Bash(dir tests)",
+      "Bash(pytest:*)"
     ],
     "deny": [],
     "ask": []

@@ -1,8 +1,12 @@
 from __future__ import annotations
 import os
+import sys
 from logging.config import fileConfig
 from sqlalchemy import create_engine, pool
 from alembic import context
+
+# Add the parent directory to Python path to enable app imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 # --- Load your SQLAlchemy Base & models so autogenerate can see them ---
 from app import db as app_db

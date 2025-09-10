@@ -66,11 +66,13 @@ async def _get_json(client: httpx.AsyncClient, url: str, *, params: Dict[str, An
 # --- PubMed (E-utilities) ---
 async def pubmed_search_async(term: str, max_n: int = 25) -> List[Dict]:
     """
-    Uses ESearch + ESummary (abstract optional via EFetch; skipped for now).
+    Uses ESearch + ESummary + EFetch for complete article metadata including abstracts.
     Honors NCBI API etiquette if NCBI_API_KEY/tool/email provided.
     """
     esearch = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
     esummary = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+    efetch = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+    
     base_params = {
         "db": "pubmed",
         "retmode": "json",
@@ -81,6 +83,7 @@ async def pubmed_search_async(term: str, max_n: int = 25) -> List[Dict]:
         base_params["api_key"] = os.getenv("NCBI_API_KEY")
 
     async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, headers=DEFAULT_HEADERS) as client:
+        # Step 1: Search for article IDs
         try:
             p = dict(base_params)
             p.update({"term": term, "retmax": max_n})
@@ -88,43 +91,120 @@ async def pubmed_search_async(term: str, max_n: int = 25) -> List[Dict]:
             ids = r.get("esearchresult", {}).get("idlist", []) or []
             if not ids:
                 return []
-
-            p2 = dict(base_params)
-            p2.update({"id": ",".join(ids)})
-            data = await _get_json(client, esummary, params=p2)
         except Exception as e:
-            logger.info("PubMed: returning [] (%s)", e)
+            logger.warning(f"PubMed ESearch error: {e}")
             return []
 
-    result = data.get("result", {}) if isinstance(data, dict) else {}
+        # Step 2: Get summary data (title, year, authors, DOI)
+        try:
+            p2 = dict(base_params)
+            p2.update({"id": ",".join(ids)})
+            summary_data = await _get_json(client, esummary, params=p2)
+        except Exception as e:
+            logger.warning(f"PubMed ESummary error: {e}")
+            return []
+            
+        # Step 3: Get abstracts via EFetch (optional - don't fail if this doesn't work)
+        abstracts = {}
+        try:
+            logger.info(f"PubMed: Attempting EFetch for {len(ids)} PMIDs")
+            p3 = {
+                "db": "pubmed",
+                "rettype": "abstract",
+                "retmode": "xml", 
+                "tool": os.getenv("NCBI_TOOL", "evidence-assistant"),
+                "email": os.getenv("NCBI_EMAIL") or os.getenv("CROSSREF_MAILTO"),
+                "id": ",".join(ids)
+            }
+            if os.getenv("NCBI_API_KEY"):
+                p3["api_key"] = os.getenv("NCBI_API_KEY")
+                
+            abstract_response = await _get(client, efetch, params=p3)
+            abstract_text = abstract_response.text
+            logger.info(f"PubMed: EFetch returned {len(abstract_text)} characters")
+            
+            # Parse abstracts from XML response
+            if abstract_text:
+                root = ET.fromstring(abstract_text)
+                for article in root.findall(".//PubmedArticle"):
+                    pmid_elem = article.find(".//PMID")
+                    abstract_elem = article.find(".//AbstractText")
+                    if pmid_elem is not None and abstract_elem is not None:
+                        pmid = pmid_elem.text
+                        abstract = abstract_elem.text or ""
+                        abstracts[pmid] = abstract.strip()
+        except Exception as e:
+            logger.warning(f"PubMed EFetch failed (non-fatal): {e}")
+            # Continue without abstracts
+
+    # Parse abstracts from XML response
+    abstracts = {}
+    try:
+        if abstract_text:
+            root = ET.fromstring(abstract_text)
+            for article in root.findall(".//PubmedArticle"):
+                pmid_elem = article.find(".//PMID")
+                abstract_elem = article.find(".//AbstractText")
+                if pmid_elem is not None and abstract_elem is not None:
+                    pmid = pmid_elem.text
+                    abstract = abstract_elem.text or ""
+                    abstracts[pmid] = abstract.strip()
+    except Exception as e:
+        logger.warning(f"PubMed abstract parsing failed: {e}")
+
+    result = summary_data.get("result", {}) if isinstance(summary_data, dict) else {}
     out: List[Dict] = []
+    
     for pmid in ids:
         item = result.get(pmid) or {}
         title = (item.get("title") or "").strip().rstrip(".")
+        
+        # Skip records with no title
+        if not title:
+            continue
+            
         pubdate = item.get("pubdate") or ""
         year = int(pubdate[:4]) if (pubdate and pubdate[:4].isdigit()) else None
+        
+        # Extract DOI
         doi = None
         eloc = item.get("elocationid") or ""
         if isinstance(eloc, str) and eloc.lower().startswith("doi:"):
             doi = eloc.split(":", 1)[1].strip()
         
-        # Extract authors from the ESummary response
+        # Enhanced author extraction with multiple fallback strategies
         authors = []
+        # Strategy 1: ESummary authors field
         if "authors" in item and isinstance(item["authors"], list):
             for author in item["authors"]:
-                if isinstance(author, dict) and "name" in author:
-                    authors.append(author["name"])
+                if isinstance(author, dict):
+                    name = author.get("name") or author.get("authname") or ""
+                    if name:
+                        authors.append(name)
+        
+        # Strategy 2: ESummary authorlist field
         elif "authorlist" in item and isinstance(item["authorlist"], list):
-            # Alternative format
             for author in item["authorlist"]:
-                if isinstance(author, dict) and "name" in author:
-                    authors.append(author["name"])
+                if isinstance(author, dict):
+                    name = author.get("name") or author.get("authname") or ""
+                    if name:
+                        authors.append(name)
+        
+        # Strategy 3: Direct authname field (some API versions)
+        elif "authname" in item and isinstance(item["authname"], str):
+            # Split comma-separated author string
+            author_names = [a.strip() for a in item["authname"].split(",") if a.strip()]
+            authors.extend(author_names)
+            
         authors_str = ", ".join(authors) if authors else None
+        
+        # Get abstract from parsed XML
+        abstract = abstracts.get(pmid, "").strip() or None
         
         out.append({
             "record_id": f"pmid:{pmid}",
             "title": title,
-            "abstract": None,
+            "abstract": abstract,
             "authors": authors_str,
             "year": year,
             "doi": doi,
@@ -149,7 +229,12 @@ async def crossref_search_async(term: str, max_n: int = 25, mailto: Optional[str
 
     out: List[Dict] = []
     for it in items:
-        title = " ".join(it.get("title") or [])
+        title = " ".join(it.get("title") or []).strip()
+        
+        # Skip records with no title
+        if not title:
+            continue
+            
         year = None
         try:
             year = it.get("issued", {}).get("date-parts", [[None]])[0][0]
@@ -157,20 +242,49 @@ async def crossref_search_async(term: str, max_n: int = 25, mailto: Optional[str
                 year = int(year)
         except Exception:
             pass
+            
         doi = it.get("DOI")
         url = it.get("URL")
         
-        # Extract authors from Crossref response
+        # Enhanced author extraction from Crossref response
         authors = []
         if "author" in it and isinstance(it["author"], list):
             for author in it["author"]:
                 if isinstance(author, dict):
-                    given = author.get("given", "")
-                    family = author.get("family", "")
+                    given = author.get("given", "").strip()
+                    family = author.get("family", "").strip()
+                    suffix = author.get("suffix", "").strip()
+                    
+                    # Build full name with proper formatting
+                    name_parts = []
+                    if given:
+                        name_parts.append(given)
+                    if family:
+                        name_parts.append(family)
+                    if suffix:
+                        name_parts.append(suffix)
+                    
+                    if name_parts:
+                        full_name = " ".join(name_parts)
+                        authors.append(full_name)
+                    elif "name" in author:
+                        # Fallback to name field if available
+                        name = author.get("name", "").strip()
+                        if name:
+                            authors.append(name)
+        
+        # Additional fallback for author extraction
+        elif "editor" in it and isinstance(it["editor"], list):
+            # Sometimes authors are listed as editors
+            for editor in it["editor"]:
+                if isinstance(editor, dict):
+                    given = editor.get("given", "").strip()
+                    family = editor.get("family", "").strip()
                     if given and family:
                         authors.append(f"{given} {family}")
                     elif family:
                         authors.append(family)
+                        
         authors_str = ", ".join(authors) if authors else None
         
         out.append({
@@ -419,35 +533,98 @@ async def scholar_serpapi_async(query: str, max_n: int = 25, year_min: int | Non
             return []
 
     out: List[Dict[str, Any]] = []
-    for r in (data.get("organic_results") or []):
+    results = data.get("organic_results") or []
+    
+    if not results:
+        # Log what we got back to help debug
+        logger.warning(f"Scholar(SerpAPI): No organic_results in response. Keys: {list(data.keys())}")
+        error = data.get("error")
+        if error:
+            logger.error(f"Scholar(SerpAPI): API error: {error}")
+        return []
+    
+    for r in results:
         title = (r.get("title") or "").strip()
         link = r.get("link")
         snippet = r.get("snippet") or r.get("summary") or ""
-        year = None
-        text_for_year = " ".join([str(r.get("publication_info", {}).get("summary") or ""), snippet])
-        m = re.search(r"\b(19|20)\d{2}\b", text_for_year)
-        if m:
-            try:
-                year = int(m.group(0))
-            except Exception:
-                year = None
-
+        
+        # Skip records with insufficient data
         if not title or not link:
             continue
         
-        # Extract authors from Google Scholar response
-        authors_str = None
+        # Enhanced year extraction
+        year = None
         pub_info = r.get("publication_info", {})
-        if isinstance(pub_info, dict):
-            authors_field = pub_info.get("authors") or pub_info.get("summary", "")
-            if authors_field and isinstance(authors_field, str):
-                # Extract authors from "Author1, Author2 - Journal, 2023" format
-                parts = authors_field.split(" - ")
-                if len(parts) > 1:
+        
+        # Try multiple sources for year
+        year_sources = [
+            pub_info.get("summary", ""),
+            snippet,
+            title,
+            str(pub_info)
+        ]
+        
+        for source in year_sources:
+            if year:
+                break
+            m = re.search(r"\b(19|20)\d{2}\b", str(source))
+            if m:
+                try:
+                    year = int(m.group(0))
+                    break
+                except Exception:
+                    continue
+        
+        # Enhanced author extraction from Google Scholar response
+        authors_str = None
+        
+        # Strategy 1: Direct authors field
+        if isinstance(pub_info, dict) and "authors" in pub_info:
+            authors_field = pub_info["authors"]
+            if isinstance(authors_field, list):
+                # If it's a list of author objects
+                authors_names = []
+                for author in authors_field:
+                    if isinstance(author, dict) and "name" in author:
+                        authors_names.append(author["name"])
+                    elif isinstance(author, str):
+                        authors_names.append(author)
+                if authors_names:
+                    authors_str = ", ".join(authors_names)
+            elif isinstance(authors_field, str) and authors_field.strip():
+                authors_str = authors_field.strip()
+        
+        # Strategy 2: Parse from publication summary
+        if not authors_str and isinstance(pub_info, dict):
+            summary = pub_info.get("summary", "")
+            if isinstance(summary, str) and " - " in summary:
+                # Format: "Author1, Author2, Author3 - Journal Name, Year"
+                parts = summary.split(" - ")
+                if len(parts) >= 2:
                     potential_authors = parts[0].strip()
-                    # Remove common non-author prefixes
-                    if not any(word in potential_authors.lower() for word in ["cited by", "related", "versions"]):
-                        authors_str = potential_authors
+                    # Filter out non-author content
+                    exclude_terms = [
+                        "cited by", "related", "versions", "[pdf]", "[html]", 
+                        "abstract", "full text", "download", "view", "google scholar"
+                    ]
+                    if potential_authors and not any(term in potential_authors.lower() for term in exclude_terms):
+                        # Additional validation - should contain typical name patterns
+                        if re.search(r"[A-Z][a-z]+", potential_authors):
+                            authors_str = potential_authors
+        
+        # Strategy 3: Extract from snippet if it contains author-like patterns
+        if not authors_str and snippet:
+            # Look for patterns like "by Author Name" or "Author Name et al"
+            author_patterns = [
+                r"[Bb]y ([A-Z][a-z]+ [A-Z][a-z]+(?:, [A-Z][a-z]+ [A-Z][a-z]+)*)",
+                r"([A-Z][a-z]+ [A-Z][a-z]+(?:, [A-Z][a-z]+ [A-Z][a-z]+)*) et al",
+            ]
+            
+            for pattern in author_patterns:
+                match = re.search(pattern, snippet)
+                if match:
+                    authors_str = match.group(1)
+                    break
         
         rid = "scholar:" + hashlib.md5(link.encode("utf-8")).hexdigest()
         out.append({

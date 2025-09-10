@@ -1,4 +1,10 @@
 from __future__ import annotations
+import sys
+import os
+
+# Add the parent directory to Python path to enable app imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
 from app.rubric import Rubric
 
 def main():

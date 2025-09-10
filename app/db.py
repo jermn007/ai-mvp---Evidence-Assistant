@@ -3,7 +3,7 @@ from __future__ import annotations
 import os, json, uuid, datetime as dt
 from typing import Optional, Dict, Any, List
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Text, DateTime, ForeignKey, Float
+    create_engine, Column, String, Integer, Text, DateTime, ForeignKey, Float, Boolean
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -36,6 +36,38 @@ class Record(Base):
     url = Column(Text, nullable=True)
     source = Column(String, nullable=True)
     publication_type = Column(String, nullable=True)  # Journal Article, Conference Paper, Preprint, etc.
+    
+    # Extended metadata fields
+    journal = Column(String, nullable=True)
+    conference = Column(String, nullable=True)
+    publisher = Column(String, nullable=True)
+    volume = Column(String, nullable=True)
+    issue = Column(String, nullable=True)
+    pages = Column(String, nullable=True)
+    
+    # Language and location
+    language = Column(String, nullable=True)
+    country = Column(String, nullable=True)
+    
+    # Additional identifiers
+    pmid = Column(String, nullable=True, index=True)         # PubMed ID
+    arxiv_id = Column(String, nullable=True, index=True)     # arXiv identifier  
+    issn = Column(String, nullable=True)                     # Journal ISSN
+    isbn = Column(String, nullable=True)                     # Book ISBN
+    
+    # Subject classification
+    subjects = Column(Text, nullable=True)                   # Subject headings/keywords (comma-separated)
+    mesh_terms = Column(Text, nullable=True)                 # Medical Subject Headings (comma-separated)
+    
+    # Full-text availability
+    pdf_url = Column(Text, nullable=True)                    # Direct PDF URL
+    fulltext_url = Column(Text, nullable=True)               # Full-text HTML URL
+    open_access = Column(Boolean, nullable=True)             # Open access status
+    
+    # Citation information
+    cited_by_count = Column(Integer, nullable=True)
+    reference_count = Column(Integer, nullable=True)
+    
     created_at = Column(DateTime, default=dt.datetime.utcnow)
     run = relationship("SearchRun", back_populates="records")
 

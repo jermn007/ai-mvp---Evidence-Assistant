@@ -53,18 +53,49 @@ def plan_press(state):
 
 
 def _dedupe_records(recs: List[RecordModel]) -> List[RecordModel]:
+    """Deduplicate records using configurable similarity thresholds"""
+    from app.config import get_config
+    config = get_config()
+    
     out: List[RecordModel] = []
     seen_keys = set()
+    
     for r in recs:
-        key = (r.doi or r.record_id or "").lower()
+        # Exact matching by DOI/ID
+        if config.deduplication.use_exact_matching:
+            key = (r.doi or r.pmid or r.arxiv_id or r.record_id or "").lower()
+            if key and key in seen_keys:
+                continue
+        
         title = (r.title or "").lower()
-        if key and key in seen_keys:
-            continue
-        if any(fuzz.token_set_ratio(title, o.title.lower()) >= 96 for o in out):
-            continue
-        out.append(r)
-        if key:
-            seen_keys.add(key)
+        is_duplicate = False
+        
+        # Title similarity check
+        title_threshold = config.deduplication.title_similarity_threshold
+        if any(fuzz.token_set_ratio(title, o.title.lower()) >= title_threshold for o in out):
+            is_duplicate = True
+        
+        # Abstract similarity check (if enabled)
+        if not is_duplicate and config.deduplication.abstract_similarity_enabled:
+            abstract = (r.abstract or "").lower()
+            if abstract and len(abstract) > 50:  # Only check substantial abstracts
+                abstract_threshold = config.deduplication.abstract_similarity_threshold
+                if any(fuzz.token_set_ratio(abstract, (o.abstract or "").lower()) >= abstract_threshold for o in out if o.abstract):
+                    is_duplicate = True
+        
+        # Author similarity check (if enabled)
+        if not is_duplicate and config.deduplication.author_similarity_enabled:
+            authors = (r.authors or "").lower()
+            if authors:
+                author_threshold = config.deduplication.author_similarity_threshold
+                if any(fuzz.token_set_ratio(authors, (o.authors or "").lower()) >= author_threshold for o in out if o.authors):
+                    is_duplicate = True
+        
+        if not is_duplicate:
+            out.append(r)
+            if config.deduplication.use_exact_matching and key:
+                seen_keys.add(key)
+    
     return out
 
 
@@ -154,8 +185,41 @@ def harvest(state):
         for record in filtered:
             record["publication_type"] = "Unknown"
 
+    # Data quality validation - filter out incomplete records
+    def is_valid_record(record):
+        """Check if record has minimum required data quality"""
+        title = record.get("title", "").strip()
+        source = record.get("source", "").strip()
+        
+        # Must have title and source
+        if not title or not source:
+            return False
+            
+        # Skip records with placeholder or empty titles
+        placeholder_titles = ["", "untitled", "no title", "title not available"]
+        if title.lower() in placeholder_titles or len(title) < 5:
+            return False
+            
+        # Prefer records with authors (but don't require)
+        authors = record.get("authors", "").strip()
+        abstract = record.get("abstract", "").strip()
+        
+        # At minimum, should have either authors or abstract 
+        if not authors and not abstract:
+            logger.debug(f"Filtering low-quality record: {title[:50]}... (no authors or abstract)")
+            return False
+            
+        return True
+    
+    quality_filtered = [r for r in filtered if is_valid_record(r)]
+    
+    logger.info(
+        f"harvest: data quality filter removed {len(filtered) - len(quality_filtered)} "
+        f"records with insufficient metadata"
+    )
+
     # Validate to models
-    state["records"] = [RecordModel.model_validate(r) for r in filtered]
+    state["records"] = [RecordModel.model_validate(r) for r in quality_filtered]
 
     # Update PRISMA and observability
     identified_count = sum(per_src.values())
@@ -308,6 +372,8 @@ async def dedupe_screen(state):
     pc.excluded = sum(1 for s in screenings if s.decision == "exclude")
     pc.eligible = len(kept)
 
+    # Store all deduped records (before screening) for persistence 
+    state["original_records"] = deduped
     state["records"] = kept
     state["screenings"] = screenings
     state["prisma"] = pc
