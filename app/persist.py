@@ -33,11 +33,6 @@ def persist_run(state: Dict[str, Any]) -> str:
 
         # Create the run row with the final run_id
         run = SearchRun(id=run_id, query=state.get("query", ""))
-        s.add(run); s.flush()
-
-    with get_session() as s:
-        # Run row
-        run = SearchRun(id=run_id, query=state.get("query", ""))
         s.add(run)
         s.flush()
 

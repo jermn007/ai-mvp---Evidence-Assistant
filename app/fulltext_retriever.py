@@ -8,7 +8,7 @@ import os
 import logging
 import requests
 import tempfile
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Any
 from dataclasses import dataclass
 import re
 from urllib.parse import urlparse
@@ -60,7 +60,7 @@ class FullTextRetriever:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
         
-    def retrieve_fulltext(self, record: Dict[str, any]) -> FullTextContent:
+    def retrieve_fulltext(self, record: Dict[str, Any]) -> FullTextContent:
         """Attempt to retrieve full text for a record"""
         record_id = record.get('record_id', 'unknown')
         title = record.get('title', 'Unknown')
