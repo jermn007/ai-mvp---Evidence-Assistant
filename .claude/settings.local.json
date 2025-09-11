@@ -23,7 +23,8 @@
       "Bash(set PYTHONPATH=%CD%)",
       "Bash(dir tests)",
       "Bash(pytest:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(set LLM_MOCK_MODE=true)"
     ],
     "deny": [],
     "ask": []

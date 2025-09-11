@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from uuid import uuid4
 import asyncio
 import io
@@ -14,6 +15,7 @@ from types import SimpleNamespace as _NS
 
 from fastapi import FastAPI, HTTPException, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
 from pydantic import BaseModel
 from sqlalchemy import select, or_, func, cast, case
 from sqlalchemy.types import Float as SA_Float
@@ -129,6 +131,8 @@ async def _select_mappings(stmt):
     raise RuntimeError("No usable session factory in app.db.")
 
 
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title="Evidence Assistant (MVP)")
 
 app.add_middleware(
@@ -138,6 +142,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info(f"REQUEST: {request.method} {request.url.path}")
+    try:
+        response = await call_next(request)
+        logger.info(f"RESPONSE: {request.method} {request.url.path} -> {response.status_code}")
+        return response
+    except Exception as e:
+        logger.error(f"REQUEST ERROR: {request.method} {request.url.path} -> {type(e).__name__}: {e}")
+        import traceback
+        logger.error(f"REQUEST ERROR TRACEBACK: {traceback.format_exc()}")
+        raise
 
 GRAPH = get_graph()
 
@@ -244,11 +261,26 @@ def _pubmed_query_from_strategy(strat: PressStrategy | dict) -> tuple[str, Optio
             last_n = combines[-1]
     if last_n is None and lines:
         last_n = getattr(lines[-1], "n", None)
-    q_final = qmap.get(last_n) or qmap.get(max(qmap.keys()) if qmap else None) or ""
+    # Safely get the final query, ensuring it's never None
+    q_final = ""
+    if qmap:
+        if last_n and last_n in qmap:
+            q_final = qmap[last_n]
+        elif qmap:
+            # Get the query with the highest key
+            max_key = max(qmap.keys())
+            q_final = qmap[max_key]
+    
+    # Ensure we never return None
+    q_final = q_final or ""
     return q_final, years
 
 def _genericize_query(pubmed_q: str) -> str:
     """Strip PubMed field tags and keep a textual boolean query suitable for general sources."""
+    # Safety check for None values
+    if pubmed_q is None:
+        return ""
+    
     q = pubmed_q
     # Remove square-bracket tags like [tiab], [Mesh], [dp], [la]
     q = re.sub(r"\[[^\]]+\]", "", q)
@@ -260,15 +292,32 @@ def _genericize_query(pubmed_q: str) -> str:
 @app.post("/run/press")
 async def run_with_press(body: RunWithPressBody):
     try:
+        logger.info(f"run_with_press: endpoint called with thread_id={getattr(body, 'thread_id', None)}")
         tid = body.thread_id or str(uuid4())
         plan = body.plan
+        logger.info(f"run_with_press: processing plan with {len(plan.strategies) if hasattr(plan, 'strategies') else 'unknown'} strategies")
         # Pull MEDLINE/PubMed strategy
         strat = plan.strategies.get("MEDLINE") if isinstance(plan.strategies, dict) else None
         if strat is None:
             raise HTTPException(status_code=400, detail="Plan missing MEDLINE strategy")
 
-        pubmed_q, years = _pubmed_query_from_strategy(strat)
-        generic_q = _genericize_query(pubmed_q)
+        try:
+            pubmed_q, years = _pubmed_query_from_strategy(strat)
+            logger.info(f"run_with_press: extracted pubmed_q: {pubmed_q[:100]}...")
+        except Exception as e:
+            logger.error(f"run_with_press: _pubmed_query_from_strategy failed: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"run_with_press: _pubmed_query_from_strategy traceback: {traceback.format_exc()}")
+            raise
+            
+        try:
+            generic_q = _genericize_query(pubmed_q)
+            logger.info(f"run_with_press: generic_q: {generic_q[:100]}...")
+        except Exception as e:
+            logger.error(f"run_with_press: _genericize_query failed: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"run_with_press: _genericize_query traceback: {traceback.format_exc()}")
+            raise
 
         # Choose sources: override or sensible default
         srcs = body.sources or ["PubMed", "Crossref", "ERIC", "SemanticScholar", "GoogleScholar", "arXiv"]
@@ -283,8 +332,26 @@ async def run_with_press(body: RunWithPressBody):
         )
 
         init_state = {"query": generic_q, "press": press_snapshot}
-        final = await GRAPH.ainvoke(init_state, config={"configurable": {"thread_id": tid}})
-        run_id = persist_run(final)
+        logger.info(f"run_with_press: starting graph execution with query: {generic_q[:100]}...")
+        logger.info(f"run_with_press: thread_id={tid}, sources={srcs}")
+        
+        try:
+            final = await GRAPH.ainvoke(init_state, config={"configurable": {"thread_id": tid}})
+            logger.info(f"run_with_press: graph execution completed successfully")
+        except Exception as graph_error:
+            logger.error(f"run_with_press: graph execution failed: {type(graph_error).__name__}: {graph_error}")
+            import traceback
+            logger.error(f"run_with_press: graph execution traceback: {traceback.format_exc()}")
+            raise
+            
+        try:
+            run_id = persist_run(final)
+            logger.info(f"run_with_press: run persisted with id: {run_id}")
+        except Exception as persist_error:
+            logger.error(f"run_with_press: persist_run failed: {type(persist_error).__name__}: {persist_error}")
+            import traceback
+            logger.error(f"run_with_press: persist_run traceback: {traceback.format_exc()}")
+            raise
         prisma = final["prisma"].model_dump() if hasattr(final.get("prisma"), "model_dump") else final.get("prisma", {})
         ratings = [a.rating for a in final.get("appraisals", [])]
         return {
@@ -300,6 +367,9 @@ async def run_with_press(body: RunWithPressBody):
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        logger.error(f"run_with_press failed: {type(e).__name__}: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"run_with_press failed: {type(e).__name__}: {e}")
 
 
@@ -1155,10 +1225,10 @@ def _press_strategy_medline(lico: LICO, *, template: str | None = None, use_stoc
     years = years_override or limits.get("years_default") or os.getenv("PRESS_YEAR_MIN", "2019-")
 
     lico_map = {
-        "learner": _split_terms((lico.learner or "").strip()),
-        "intervention": _split_terms((lico.intervention or "").strip()),
-        "context": _split_terms((lico.context or "").strip()),
-        "outcome": _split_terms((lico.outcome or "").strip()),
+        "learner": _split_terms((getattr(lico, 'learner', None) or "").strip()),
+        "intervention": _split_terms((getattr(lico, 'intervention', None) or "").strip()),
+        "context": _split_terms((getattr(lico, 'context', None) or "").strip()),
+        "outcome": _split_terms((getattr(lico, 'outcome', None) or "").strip()),
     }
 
     # Build facet lines; skip empty ones, then number sequentially
@@ -1220,7 +1290,12 @@ def plan_press_from_lico(lico: LICO, databases: Optional[List[DatabaseSpec]] = N
     db = dbs[0]
     strat = _press_strategy_medline(lico, template=template, use_stock=use_stock, db_name=db.name or "MEDLINE", interface=db.interface or "PubMed", years_override=years)
 
-    has_custom = any([(lico.learner or "").strip(), (lico.intervention or "").strip(), (lico.context or "").strip(), (lico.outcome or "").strip()])
+    has_custom = any([
+        (getattr(lico, 'learner', None) or "").strip(),
+        (getattr(lico, 'intervention', None) or "").strip(),
+        (getattr(lico, 'context', None) or "").strip(),
+        (getattr(lico, 'outcome', None) or "").strip()
+    ])
     checklist = {
         "translation": "pass",
         "subject_headings": "pass" if use_stock else "suggest",

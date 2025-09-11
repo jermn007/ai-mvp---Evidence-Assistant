@@ -49,6 +49,28 @@ class AppraisalConfig:
     amber_min: float = 0.55
     green_min: float = 0.75
 
+@dataclass
+class ModelSpecificConfig:
+    """Configuration for a specific model"""
+    temperature: float = 0.3
+    max_tokens: int = 2000
+    max_retries: int = 3
+    timeout: int = 60
+    cost_per_1k_tokens: Dict[str, float] = None
+
+@dataclass
+class LLMConfig:
+    """Configuration for LLM behavior"""
+    default_model: str = "gpt-4"
+    fallback_model: str = "gpt-3.5-turbo"
+    fast_model: str = "gpt-3.5-turbo"
+    models: Dict[str, ModelSpecificConfig] = None
+    rate_limits: Dict[str, int] = None
+    retries: Dict[str, Any] = None
+    observability: Dict[str, Any] = None
+    security: Dict[str, Any] = None
+    environments: Dict[str, Dict[str, Any]] = None
+
 @dataclass 
 class AppConfig:
     """Main application configuration"""
@@ -57,6 +79,7 @@ class AppConfig:
     search: SearchConfig
     screening: ScreeningConfig
     appraisal: AppraisalConfig
+    llm: LLMConfig
 
 class ConfigLoader:
     """Loads and manages application configuration"""
@@ -159,12 +182,40 @@ class ConfigLoader:
             green_min=thresholds.get("green_min", 0.75)
         )
         
+        # LLM config
+        llm_data = yaml_data.get("llm", {})
+        
+        # Parse model-specific configurations
+        models_data = llm_data.get("models", {})
+        models = {}
+        for model_name, model_config in models_data.items():
+            models[model_name] = ModelSpecificConfig(
+                temperature=model_config.get("temperature", 0.3),
+                max_tokens=model_config.get("max_tokens", 2000),
+                max_retries=model_config.get("max_retries", 3),
+                timeout=model_config.get("timeout", 60),
+                cost_per_1k_tokens=model_config.get("cost_per_1k_tokens", {})
+            )
+        
+        llm = LLMConfig(
+            default_model=llm_data.get("default_model", "gpt-4"),
+            fallback_model=llm_data.get("fallback_model", "gpt-3.5-turbo"),
+            fast_model=llm_data.get("fast_model", "gpt-3.5-turbo"),
+            models=models,
+            rate_limits=llm_data.get("rate_limits", {}),
+            retries=llm_data.get("retries", {}),
+            observability=llm_data.get("observability", {}),
+            security=llm_data.get("security", {}),
+            environments=llm_data.get("environments", {})
+        )
+        
         return AppConfig(
             deduplication=deduplication,
             metadata=metadata,
             search=search,
             screening=screening,
-            appraisal=appraisal
+            appraisal=appraisal,
+            llm=llm
         )
     
     def _get_default_config(self) -> AppConfig:
@@ -177,7 +228,8 @@ class ConfigLoader:
             ),
             search=SearchConfig(),
             screening=ScreeningConfig(),
-            appraisal=AppraisalConfig()
+            appraisal=AppraisalConfig(),
+            llm=LLMConfig()
         )
     
     def _get_default_core_fields(self) -> List[str]:

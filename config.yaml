@@ -113,3 +113,98 @@ appraisal:
     red_max: 0.54
     amber_min: 0.55
     green_min: 0.75
+
+# LLM (Language Model) Configuration
+llm:
+  # Model selection and fallbacks
+  default_model: "gpt-4"           # Primary model for complex tasks
+  fallback_model: "gpt-3.5-turbo" # Fallback when primary fails
+  fast_model: "gpt-3.5-turbo"     # For simple classification tasks
+  
+  # Model-specific settings
+  models:
+    gpt-4:
+      temperature: 0.3
+      max_tokens: 2000
+      max_retries: 3
+      timeout: 60
+      cost_per_1k_tokens:
+        prompt: 0.03
+        completion: 0.06
+    
+    gpt-4-turbo-preview:
+      temperature: 0.3
+      max_tokens: 4000
+      max_retries: 3
+      timeout: 120
+      cost_per_1k_tokens:
+        prompt: 0.01
+        completion: 0.03
+    
+    gpt-3.5-turbo:
+      temperature: 0.1
+      max_tokens: 1000
+      max_retries: 3
+      timeout: 30
+      cost_per_1k_tokens:
+        prompt: 0.0015
+        completion: 0.002
+        
+    gpt-3.5-turbo-16k:
+      temperature: 0.1
+      max_tokens: 4000
+      max_retries: 3
+      timeout: 60
+      cost_per_1k_tokens:
+        prompt: 0.003
+        completion: 0.004
+  
+  # Rate limiting and performance
+  rate_limits:
+    requests_per_minute: 60
+    tokens_per_minute: 100000
+    concurrent_requests: 5
+    
+  # Retry and error handling
+  retries:
+    enabled: true
+    max_attempts: 3
+    backoff_factor: 2
+    max_wait_time: 60
+    retry_on_rate_limit: true
+    
+  # Observability and monitoring
+  observability:
+    enable_callbacks: true
+    enable_langsmith: false      # Set to true and provide API key to enable
+    langsmith_project: "ai-mvp-evidence-assistant"
+    log_requests: true
+    log_responses: false         # Set to true for debugging (may log sensitive data)
+    track_token_usage: true
+    cost_monitoring: true
+    
+  # Security and validation
+  security:
+    max_prompt_length: 10000
+    allowed_domains: 
+      - "*.openai.com"
+      - "api.openai.com"
+    sanitize_inputs: true
+    prevent_prompt_injection: true
+    
+  # Environment-specific overrides
+  environments:
+    development:
+      default_model: "gpt-3.5-turbo"
+      enable_langsmith: true
+      log_responses: true
+      
+    testing:
+      mock_mode: true
+      enable_callbacks: false
+      
+    production:
+      default_model: "gpt-4"
+      enable_langsmith: true
+      log_responses: false
+      cost_monitoring: true

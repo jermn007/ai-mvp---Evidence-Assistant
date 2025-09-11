@@ -1,32 +1,39 @@
 # app/publication_classifier.py
 """
 AI-powered publication type classification for academic records.
-Uses OpenAI to analyze titles, abstracts, and metadata to determine publication types.
+Uses LangChain and centralized LLM factory to analyze titles, abstracts, and metadata.
 """
 
-import os
 import logging
-from typing import Optional, Dict, Any
-import openai
+from typing import Optional, Dict, Any, List
+from pydantic import BaseModel, Field
+
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.language_models import BaseChatModel
 
 logger = logging.getLogger("ai_mvp.publication_classifier")
 
-# Configure OpenAI client
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+class PublicationClassification(BaseModel):
+    """Structured publication classification result"""
+    publication_type: str = Field(description="The classified publication type")
+    confidence: float = Field(description="Confidence score from 0.0 to 1.0")
+    reasoning: str = Field(description="Brief explanation for the classification")
 
-def classify_publication_type(
+async def classify_publication_type(
     title: str,
     abstract: Optional[str] = None,
     source: Optional[str] = None,
     url: Optional[str] = None,
-    doi: Optional[str] = None
+    doi: Optional[str] = None,
+    use_ai: bool = True
 ) -> str:
     """
-    Classify publication type using AI analysis of metadata.
+    Classify publication type using rule-based and AI analysis.
     
     Returns one of:
     - Journal Article
-    - Conference Paper
+    - Conference Paper  
     - Preprint
     - Book Chapter
     - Thesis/Dissertation
@@ -38,22 +45,42 @@ def classify_publication_type(
     """
     
     # Quick rule-based classification for obvious cases
+    rule_based_result = _rule_based_classification(title, source, url, doi)
+    if rule_based_result != "Unknown":
+        return rule_based_result
+    
+    # Use AI classification if enabled and available
+    if use_ai:
+        try:
+            ai_result = await _ai_classify_publication_type(title, abstract, source, url, doi)
+            if ai_result and ai_result.publication_type != "Unknown":
+                logger.debug(f"AI classified as {ai_result.publication_type} with confidence {ai_result.confidence}")
+                return ai_result.publication_type
+        except Exception as e:
+            logger.warning(f"AI classification failed: {e}. Using fallback.")
+    
+    # Fallback to source-based classification
+    return _fallback_classification(source)
+
+def _rule_based_classification(
+    title: str,
+    source: Optional[str] = None,
+    url: Optional[str] = None,
+    doi: Optional[str] = None
+) -> str:
+    """Apply rule-based classification for obvious cases"""
+    
+    # Source-based classification
     if source:
-        source_lower = source.lower()
+        source_lower = (source or "").lower()
         if "arxiv" in source_lower:
             return "Preprint"
         elif "pubmed" in source_lower:
             return "Journal Article"
-        elif source_lower in ["eric"]:
-            # ERIC contains mixed types, need AI analysis
-            pass
-        elif "scholar" in source_lower:
-            # Google Scholar contains mixed types, need AI analysis
-            pass
     
-    # URL-based hints
+    # URL-based classification
     if url:
-        url_lower = url.lower()
+        url_lower = (url or "").lower()
         if "arxiv.org" in url_lower:
             return "Preprint"
         elif "pubmed" in url_lower:
@@ -61,26 +88,30 @@ def classify_publication_type(
         elif any(conf in url_lower for conf in ["proceedings", "conference", "acm.org", "ieee.org"]):
             return "Conference Paper"
     
-    # DOI-based hints
-    if doi and doi.startswith("10."):
-        # Most DOIs are for journal articles, but let AI refine
-        pass
+    # Title-based patterns
+    title_lower = (title or "").lower()
+    if any(pattern in title_lower for pattern in ["proceedings of", "conference on", "workshop on"]):
+        return "Conference Paper"
+    elif any(pattern in title_lower for pattern in ["review of", "systematic review", "meta-analysis"]):
+        return "Review Article"
+    elif any(pattern in title_lower for pattern in ["editorial", "letter to"]):
+        return "Editorial"
     
-    # If no clear indicators, use AI classification
-    try:
-        return _ai_classify_publication_type(title, abstract, source, url, doi)
-    except Exception as e:
-        logger.warning(f"AI classification failed: {e}. Using source-based fallback.")
-        return _fallback_classification(source)
+    return "Unknown"
 
-def _ai_classify_publication_type(
+async def _ai_classify_publication_type(
     title: str,
     abstract: Optional[str] = None,
     source: Optional[str] = None,
     url: Optional[str] = None,
     doi: Optional[str] = None
-) -> str:
-    """Use OpenAI to classify publication type based on content analysis."""
+) -> Optional[PublicationClassification]:
+    """Use LangChain to classify publication type based on content analysis."""
+    from app.llm_factory import get_fast_model, is_llm_available
+    
+    if not is_llm_available():
+        logger.warning("LLM not available for publication classification")
+        return None
     
     # Prepare context for AI
     context_parts = [f"Title: {title}"]
@@ -101,7 +132,11 @@ def _ai_classify_publication_type(
     
     context = "\n".join(context_parts)
     
-    prompt = f"""Analyze this academic publication and classify its type based on the content, source, and metadata.
+    # Create LangChain prompt template
+    system_prompt = """You are an expert librarian specializing in academic publication classification.
+    Analyze the provided publication metadata and classify its type with confidence and reasoning."""
+    
+    human_prompt = """Analyze this academic publication and classify its type:
 
 {context}
 
@@ -117,36 +152,52 @@ Classification Guidelines:
 - Case Study: Detailed analysis of specific cases or examples
 - Unknown: If type cannot be determined from available information
 
-Return only one of these exact classification labels."""
+Provide your response as JSON with:
+- publication_type: One of the exact classification labels above
+- confidence: A score from 0.0 to 1.0 indicating your confidence
+- reasoning: Brief explanation for your classification decision"""
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are an expert librarian specializing in academic publication classification."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=50,
-            temperature=0.1
-        )
+        # Get fast model for simple classification
+        model = get_fast_model(temperature=0.1, max_tokens=200)
         
-        classification = response.choices[0].message.content.strip()
+        # Create prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", human_prompt)
+        ])
         
-        # Validate the response matches expected categories
+        # Create output parser
+        parser = JsonOutputParser(pydantic_object=PublicationClassification)
+        
+        # Create chain
+        chain = prompt | model | parser
+        
+        # Execute classification
+        result = await chain.ainvoke({"context": context})
+        
+        # Validate result
+        if isinstance(result, dict):
+            classification = PublicationClassification(**result)
+        else:
+            classification = result
+            
+        # Validate publication type
         valid_types = {
             "Journal Article", "Conference Paper", "Preprint", "Book Chapter",
             "Thesis/Dissertation", "Technical Report", "Review Article", 
             "Editorial", "Case Study", "Unknown"
         }
         
-        if classification in valid_types:
-            return classification
-        else:
-            logger.warning(f"AI returned unexpected classification: {classification}")
-            return "Unknown"
+        if classification.publication_type not in valid_types:
+            logger.warning(f"AI returned unexpected classification: {classification.publication_type}")
+            classification.publication_type = "Unknown"
+            classification.confidence = 0.0
             
+        return classification
+        
     except Exception as e:
-        logger.error(f"OpenAI API call failed: {e}")
+        logger.error(f"LangChain classification failed: {e}")
         raise
 
 def _fallback_classification(source: Optional[str] = None) -> str:
@@ -168,30 +219,76 @@ def _fallback_classification(source: Optional[str] = None) -> str:
     else:
         return "Unknown"
 
-def batch_classify_publications(records: list[Dict[str, Any]]) -> Dict[str, str]:
+async def batch_classify_publications(records: List[Dict[str, Any]], use_ai: bool = True) -> Dict[str, str]:
     """
     Classify multiple publications in batch for efficiency.
     Returns mapping of record_id to publication_type.
     """
+    import asyncio
+    
     classifications = {}
+    
+    # Create classification tasks
+    tasks = []
+    record_ids = []
     
     for record in records:
         record_id = record.get("record_id", "")
         if not record_id:
             continue
             
-        try:
-            pub_type = classify_publication_type(
-                title=record.get("title", ""),
-                abstract=record.get("abstract"),
-                source=record.get("source"),
-                url=record.get("url"),
-                doi=record.get("doi")
-            )
-            classifications[record_id] = pub_type
-            
-        except Exception as e:
-            logger.error(f"Classification failed for {record_id}: {e}")
+        record_ids.append(record_id)
+        task = classify_publication_type(
+            title=record.get("title", ""),
+            abstract=record.get("abstract"),
+            source=record.get("source"),
+            url=record.get("url"),
+            doi=record.get("doi"),
+            use_ai=use_ai
+        )
+        tasks.append(task)
+    
+    # Execute all classifications concurrently
+    try:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for record_id, result in zip(record_ids, results):
+            if isinstance(result, Exception):
+                logger.error(f"Classification failed for {record_id}: {result}")
+                classifications[record_id] = "Unknown"
+            else:
+                classifications[record_id] = result
+                
+    except Exception as e:
+        logger.error(f"Batch classification failed: {e}")
+        # Fallback to sequential processing
+        for record_id in record_ids:
             classifications[record_id] = "Unknown"
     
     return classifications
+
+# Synchronous wrapper for backward compatibility
+def batch_classify_publications_sync(records: List[Dict[str, Any]], use_ai: bool = True) -> Dict[str, str]:
+    """
+    Synchronous wrapper for batch classification.
+    Use this when calling from non-async contexts.
+    """
+    import asyncio
+    
+    try:
+        # Create new event loop if none exists
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    try:
+        return loop.run_until_complete(batch_classify_publications(records, use_ai))
+    except RuntimeError:
+        # If we're already in an async context, create a new thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                lambda: asyncio.run(batch_classify_publications(records, use_ai))
+            )
+            return future.result()

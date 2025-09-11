@@ -63,23 +63,30 @@ class AIService:
     def __init__(self, config: Optional[AIConfig] = None):
         self.config = config or AIConfig()
         
-        # Initialize OpenAI client
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not found. AI features will be disabled.")
-            self._llm = None
-        else:
-            self._llm = ChatOpenAI(
-                model=self.config.model,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-                max_retries=self.config.max_retries,
-                api_key=api_key
-            )
+        # Use centralized LLM factory instead of direct ChatOpenAI
+        from app.llm_factory import get_llm_factory
+        self._factory = get_llm_factory()
+        
+        # Configure LangSmith if enabled
+        if self._factory.settings.enable_langsmith:
+            logger.info("LangSmith observability enabled for AI service")
     
     def is_available(self) -> bool:
         """Check if AI service is available"""
-        return self._llm is not None
+        return self._factory.is_available()
+    
+    def _get_model(self, task_type: str = "smart"):
+        """Get appropriate model for the task"""
+        if task_type == "fast":
+            return self._factory.get_fast_model(
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
+            )
+        else:
+            return self._factory.get_smart_model(
+                temperature=self.config.temperature,
+                max_tokens=self.config.max_tokens
+            )
     
     async def enhance_lico_terms(self, lico: LICO, research_domain: Optional[str] = None) -> Optional[LICOEnhancement]:
         """
@@ -133,7 +140,8 @@ class AIService:
             ])
             
             parser = JsonOutputParser(pydantic_object=LICOEnhancement)
-            chain = prompt | self._llm | parser
+            model = self._get_model("smart")
+            chain = prompt | model | parser
             
             result = await chain.ainvoke({})
             return LICOEnhancement(**result) if isinstance(result, dict) else result
@@ -191,7 +199,8 @@ class AIService:
             ])
             
             parser = JsonOutputParser(pydantic_object=PressStrategyAnalysis)
-            chain = prompt | self._llm | parser
+            model = self._get_model("smart")
+            chain = prompt | model | parser
             
             result = await chain.ainvoke({})
             return PressStrategyAnalysis(**result) if isinstance(result, dict) else result
@@ -264,7 +273,8 @@ class AIService:
             ])
             
             parser = JsonOutputParser(pydantic_object=StudyRelevanceAssessment)
-            chain = prompt | self._llm | parser
+            model = self._get_model("smart")
+            chain = prompt | model | parser
             
             result = await chain.ainvoke({})
             return StudyRelevanceAssessment(**result) if isinstance(result, dict) else result
@@ -372,7 +382,8 @@ class AIService:
                 HumanMessage(content=human_prompt)
             ]
             
-            response = await self._llm.ainvoke(messages)
+            model = self._get_model("smart")
+            response = await model.ainvoke(messages)
             return response.content.strip()
             
         except Exception as e:
@@ -418,7 +429,8 @@ Please generate a clear, focused research question that incorporates these compo
                 HumanMessage(content=human_prompt)
             ]
             
-            response = await self._llm.ainvoke(messages)
+            model = self._get_model("smart")
+            response = await model.ainvoke(messages)
             return response.content.strip()
             
         except Exception as e:
@@ -468,15 +480,16 @@ Format your response as a JSON object with keys: learner, intervention, context,
                 HumanMessage(content=human_prompt)
             ]
             
-            response = await self._llm.ainvoke(messages)
+            model = self._get_model("smart")
+            response = await model.ainvoke(messages)
             result = json.loads(response.content.strip())
             
             # Clean up and validate the extracted components
             return LICO(
-                learner=result.get("learner", "").strip() or "",
-                intervention=result.get("intervention", "").strip() or "",
-                context=result.get("context", "").strip() or "",
-                outcome=result.get("outcome", "").strip() or ""
+                learner=(result.get("learner") or "").strip() or "",
+                intervention=(result.get("intervention") or "").strip() or "",
+                context=(result.get("context") or "").strip() or "",
+                outcome=(result.get("outcome") or "").strip() or ""
             )
             
         except Exception as e:
@@ -526,7 +539,8 @@ Enhanced question:"""
                 HumanMessage(content=human_prompt)
             ]
             
-            response = await self._llm.ainvoke(messages)
+            model = self._get_model("smart")
+            response = await model.ainvoke(messages)
             return response.content.strip()
             
         except Exception as e:

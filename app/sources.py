@@ -132,7 +132,7 @@ async def pubmed_search_async(term: str, max_n: int = 25) -> List[Dict]:
                     if pmid_elem is not None and abstract_elem is not None:
                         pmid = pmid_elem.text
                         abstract = abstract_elem.text or ""
-                        abstracts[pmid] = abstract.strip()
+                        abstracts[pmid] = (abstract or "").strip()
         except Exception as e:
             logger.warning(f"PubMed EFetch failed (non-fatal): {e}")
             # Continue without abstracts
@@ -148,7 +148,7 @@ async def pubmed_search_async(term: str, max_n: int = 25) -> List[Dict]:
                 if pmid_elem is not None and abstract_elem is not None:
                     pmid = pmid_elem.text
                     abstract = abstract_elem.text or ""
-                    abstracts[pmid] = abstract.strip()
+                    abstracts[pmid] = (abstract or "").strip()
     except Exception as e:
         logger.warning(f"PubMed abstract parsing failed: {e}")
 

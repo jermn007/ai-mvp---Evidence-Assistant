@@ -15,7 +15,7 @@ def _load_terms(path: str = "config/press_terms.yaml") -> Dict:
 def _dedupe(seq: List[str]) -> List[str]:
     seen, out = set(), []
     for s in seq:
-        k = s.strip()
+        k = (s or "").strip()
         if k and k not in seen:
             seen.add(k); out.append(k)
     return out

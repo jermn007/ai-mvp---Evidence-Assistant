@@ -13,7 +13,7 @@ from app.models import (
 )
 from app.rubric import Rubric
 from app.ai_service import get_ai_service
-from app.publication_classifier import batch_classify_publications
+from app.publication_classifier import batch_classify_publications_sync as batch_classify_publications
 from app.sources import (
     pubmed_search_async, crossref_search_async, arxiv_search_async, eric_search_async,
     s2_search_async, scholar_serpapi_async,
@@ -72,7 +72,7 @@ def _dedupe_records(recs: List[RecordModel]) -> List[RecordModel]:
         
         # Title similarity check
         title_threshold = config.deduplication.title_similarity_threshold
-        if any(fuzz.token_set_ratio(title, o.title.lower()) >= title_threshold for o in out):
+        if any(fuzz.token_set_ratio(title, (o.title or "").lower()) >= title_threshold for o in out):
             is_duplicate = True
         
         # Abstract similarity check (if enabled)
@@ -118,7 +118,7 @@ def harvest(state):
     try:
         press = state.get("press")
         if press and getattr(press, "sources", None):
-            wanted = set([s.strip() for s in press.sources or []])
+            wanted = set([(s or "").strip() for s in press.sources or []])
     except Exception:
         wanted = set()
 
@@ -188,8 +188,8 @@ def harvest(state):
     # Data quality validation - filter out incomplete records
     def is_valid_record(record):
         """Check if record has minimum required data quality"""
-        title = record.get("title", "").strip()
-        source = record.get("source", "").strip()
+        title = (record.get("title") or "").strip()
+        source = (record.get("source") or "").strip()
         
         # Must have title and source
         if not title or not source:
@@ -201,8 +201,8 @@ def harvest(state):
             return False
             
         # Prefer records with authors (but don't require)
-        authors = record.get("authors", "").strip()
-        abstract = record.get("abstract", "").strip()
+        authors = (record.get("authors") or "").strip()
+        abstract = (record.get("abstract") or "").strip()
         
         # At minimum, should have either authors or abstract 
         if not authors and not abstract:
@@ -325,8 +325,16 @@ async def _screen_record(record: RecordModel, use_ai: bool = False, inclusion_cr
 async def dedupe_screen(state):
     t0 = time.perf_counter()
 
-    recs: List[RecordModel] = state.get("records", [])
-    deduped = _dedupe_records(recs)
+    try:
+        recs: List[RecordModel] = state.get("records", [])
+        logger.info(f"dedupe_screen: starting with {len(recs)} records")
+        deduped = _dedupe_records(recs)
+        logger.info(f"dedupe_screen: deduplication complete, {len(deduped)} records remaining")
+    except Exception as e:
+        import traceback
+        logger.error(f"dedupe_screen failed during deduplication: {type(e).__name__}: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        raise
     
     # Check if AI screening is enabled (can be set in state)
     use_ai_screening = state.get("use_ai_screening", False)
@@ -389,17 +397,22 @@ async def dedupe_screen(state):
 
 async def appraise(state):
     t0 = time.perf_counter()
-    global _RUBRIC
-    if _RUBRIC is None:
-        _RUBRIC = Rubric.load("rubric.yaml")
+    
+    try:
+        logger.info(f"appraise: starting with {len(state.get('records', []))} records")
+        global _RUBRIC
+        if _RUBRIC is None:
+            _RUBRIC = Rubric.load("rubric.yaml")
+            logger.info("appraise: rubric loaded")
 
-    # Check if AI rationale generation is enabled
-    use_ai_rationale = state.get("use_ai_rationale", False)
-    ai_service = get_ai_service() if use_ai_rationale else None
+        # Check if AI rationale generation is enabled
+        use_ai_rationale = state.get("use_ai_rationale", False)
+        ai_service = get_ai_service() if use_ai_rationale else None
 
-    apps: List[AppraisalModel] = []
-    for r in state.get("records", []):
-        rating, scores = _RUBRIC.rate(r.year, r.title, r.abstract)
+        apps: List[AppraisalModel] = []
+        for i, r in enumerate(state.get("records", [])):
+            logger.info(f"appraise: processing record {i+1}: {getattr(r, 'title', 'Unknown title')[:50]}...")
+            rating, scores = _RUBRIC.rate(r.year, r.title, r.abstract)
         
         # Generate AI rationale if enabled and available
         rationale = "Quality assessment based on rubric criteria"
@@ -426,16 +439,21 @@ async def appraise(state):
             citations=[r.url or ""],
         ))
 
-    pc = state.get("prisma") or PrismaCountsModel()
-    pc.included = len(apps)
+        pc = state.get("prisma") or PrismaCountsModel()
+        pc.included = len(apps)
 
-    state["appraisals"] = apps
-    state["prisma"] = pc
+        state["appraisals"] = apps
+        state["prisma"] = pc
 
-    state["timings"] = state.get("timings") or {}
-    state["timings"]["appraise"] = round(time.perf_counter() - t0, 6)
-    logger.info("appraise: n_appraised=%d", len(apps))
-    return state
+        state["timings"] = state.get("timings") or {}
+        state["timings"]["appraise"] = round(time.perf_counter() - t0, 6)
+        logger.info("appraise: n_appraised=%d", len(apps))
+        return state
+    except Exception as e:
+        import traceback
+        logger.error(f"appraise failed: {type(e).__name__}: {e}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        raise
 
 
 def report_prisma(state):

@@ -10,17 +10,13 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from pydantic import BaseModel, Field
 
-import openai
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.language_models import BaseChatModel
+
 from app.fulltext_retriever import FullTextRetriever, FullTextContent, extract_supporting_quotes, SupportingQuote
 
 logger = logging.getLogger("ai_mvp.research_synthesizer")
-
-# Configure OpenAI client (matching publication_classifier pattern)
-def _get_openai_client():
-    """Get OpenAI client with proper environment loading"""
-    from dotenv import load_dotenv
-    load_dotenv()
-    return openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 @dataclass
 class StudyFindings:
@@ -75,7 +71,7 @@ class StatisticalSummary(BaseModel):
     methodology_distribution: Dict[str, int]
     geographic_distribution: Dict[str, int]
 
-def extract_study_findings(records: List[Dict[str, Any]], retrieve_fulltext: bool = True) -> List[StudyFindings]:
+async def extract_study_findings(records: List[Dict[str, Any]], retrieve_fulltext: bool = True) -> List[StudyFindings]:
     """Extract structured findings from literature records with optional full-text retrieval"""
     findings = []
     fulltext_retriever = FullTextRetriever() if retrieve_fulltext else None
@@ -108,7 +104,7 @@ def extract_study_findings(records: List[Dict[str, Any]], retrieve_fulltext: boo
         
         if abstract and title:
             try:
-                lico_relevance = _extract_lico_relevance(title, abstract)
+                lico_relevance = await _extract_lico_relevance(title, abstract)
             except Exception as e:
                 logger.warning(f"Failed to extract LICO relevance for {record.get('record_id', 'unknown')}: {e}")
         
@@ -156,9 +152,77 @@ def extract_study_findings(records: List[Dict[str, Any]], retrieve_fulltext: boo
     
     return findings
 
-def _extract_lico_relevance(title: str, abstract: str) -> Dict[str, str]:
-    """Extract LICO-relevant content using AI"""
-    prompt = f"""Analyze this study and extract content relevant to each LICO component:
+# Synchronous wrappers for backward compatibility
+def extract_study_findings_sync(records: List[Dict[str, Any]], retrieve_fulltext: bool = True) -> List[StudyFindings]:
+    """Synchronous wrapper for extract_study_findings"""
+    import asyncio
+    
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    try:
+        return loop.run_until_complete(extract_study_findings(records, retrieve_fulltext))
+    except RuntimeError:
+        # If we're already in an async context, create a new thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                lambda: asyncio.run(extract_study_findings(records, retrieve_fulltext))
+            )
+            return future.result()
+
+def synthesize_research_sync(
+    findings: List[StudyFindings],
+    original_question: str,
+    lico_components: Optional[Dict[str, str]] = None
+) -> ResearchSynthesis:
+    """Synchronous wrapper for synthesize_research"""
+    import asyncio
+    
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    try:
+        return loop.run_until_complete(synthesize_research(findings, original_question, lico_components))
+    except RuntimeError:
+        # If we're already in an async context, create a new thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(
+                lambda: asyncio.run(synthesize_research(findings, original_question, lico_components))
+            )
+            return future.result()
+
+async def _extract_lico_relevance(title: str, abstract: str) -> Dict[str, str]:
+    """Extract LICO-relevant content using AI via LangChain"""
+    from app.llm_factory import get_smart_model, is_llm_available
+    
+    if not is_llm_available():
+        logger.warning("LLM not available for LICO extraction")
+        return {
+            "learner": "Not specified",
+            "intervention": "Not specified", 
+            "context": "Not specified",
+            "outcome": "Not specified"
+        }
+    
+    class LICOExtraction(BaseModel):
+        """LICO component extraction result"""
+        learner: str = Field(description="Target learners information")
+        intervention: str = Field(description="Educational intervention details")
+        context: str = Field(description="Learning context information")
+        outcome: str = Field(description="Learning outcomes described")
+    
+    system_prompt = """You are an expert in instructional design research analysis. 
+    Extract LICO components concisely and accurately from academic study metadata."""
+    
+    human_prompt = """Analyze this study and extract content relevant to each LICO component:
 
 Title: {title}
 Abstract: {abstract}
@@ -170,23 +234,33 @@ Extract specific content for each component:
 - Outcome: What are the learning outcomes? (knowledge, skills, behaviors, performance)
 
 Return a JSON object with keys: learner, intervention, context, outcome.
-If no relevant content found for a component, return "Not specified".
-"""
+If no relevant content found for a component, return "Not specified"."""
 
     try:
-        client = _get_openai_client()
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are an expert in instructional design research analysis. Extract LICO components concisely and accurately."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-            max_tokens=500
-        )
+        # Get smart model for complex extraction
+        model = get_smart_model(temperature=0.3, max_tokens=500)
         
-        import json
-        return json.loads(response.choices[0].message.content)
+        # Create prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", human_prompt)
+        ])
+        
+        # Create output parser
+        parser = JsonOutputParser(pydantic_object=LICOExtraction)
+        
+        # Create chain
+        chain = prompt | model | parser
+        
+        # Execute extraction
+        result = await chain.ainvoke({"title": title, "abstract": abstract})
+        
+        # Convert to dict format
+        if isinstance(result, dict):
+            return result
+        else:
+            return result.model_dump()
+            
     except Exception as e:
         logger.warning(f"LICO extraction failed: {e}")
         return {
@@ -244,15 +318,15 @@ def _extract_limitations(abstract: str) -> str:
     
     # Look for limitation indicators
     limitation_indicators = ["limitation", "constraint", "weakness", "bias", "confound"]
-    text = abstract.lower()
+    text = (abstract or "").lower()
     
     for indicator in limitation_indicators:
         if indicator in text:
             # Find sentence containing the limitation
-            sentences = abstract.split('.')
+            sentences = (abstract or "").split('.')
             for sentence in sentences:
-                if indicator in sentence.lower():
-                    return sentence.strip()
+                if indicator in (sentence or "").lower():
+                    return (sentence or "").strip()
     
     return "Not specified"
 
@@ -290,7 +364,7 @@ def generate_statistical_summary(findings: List[StudyFindings]) -> StatisticalSu
         geographic_distribution={"Various": len(findings)}  # Simplified for now
     )
 
-def synthesize_research(
+async def synthesize_research(
     findings: List[StudyFindings],
     original_question: str,
     lico_components: Optional[Dict[str, str]] = None
@@ -372,19 +446,30 @@ Focus on practical implications for instructional design practice. Be specific a
 """
 
     try:
-        client = _get_openai_client()
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a world-class instructional design researcher with expertise in evidence synthesis and educational technology. Provide thorough, evidence-based analysis while being honest about limitations."},
-                {"role": "user", "content": synthesis_prompt}
-            ],
-            temperature=0.3,
-            max_tokens=2000
-        )
+        from app.llm_factory import get_smart_model, is_llm_available
+        
+        if not is_llm_available():
+            logger.warning("LLM not available for research synthesis")
+            return _generate_fallback_synthesis(findings, original_question)
+        
+        # Get smart model for complex synthesis
+        model = get_smart_model(temperature=0.3, max_tokens=2000)
+        
+        # Create prompt template
+        system_prompt = """You are a world-class instructional design researcher with expertise in evidence synthesis and educational technology. 
+        Provide thorough, evidence-based analysis while being honest about limitations."""
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", synthesis_prompt)
+        ])
+        
+        # Create chain and execute synthesis
+        chain = prompt | model
+        response = await chain.ainvoke({})
         
         # Parse AI response into structured format
-        return _parse_synthesis_response(response.choices[0].message.content, findings, all_supporting_quotes)
+        return _parse_synthesis_response(response.content, findings, all_supporting_quotes)
         
     except Exception as e:
         logger.error(f"AI synthesis failed: {e}")
