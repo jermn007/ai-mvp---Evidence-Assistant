@@ -75,12 +75,11 @@ export function ResearchInput({
       const result = await apiClient.extractLicoFromQuestion(researchQuestion)
       console.log('Extract LICO result:', result)
       
-      // Update each LICO field
+      // Update each LICO field (set unconditionally to reflect extraction)
       Object.entries(result.lico).forEach(([key, value]) => {
-        console.log(`Updating LICO field ${key} with value:`, value)
-        if (value && value.trim() !== '') {
-          onLicoChange(key as keyof LICO, value)
-        }
+        const val = typeof value === 'string' ? value : (value ?? '')
+        console.log(`Updating LICO field ${key} with value:`, val)
+        onLicoChange(key as keyof LICO, val)
       })
       setMode('lico')
       setMessage('✅ LICO components extracted successfully!')

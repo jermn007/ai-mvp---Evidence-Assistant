@@ -18,6 +18,7 @@ from app.sources import (
     pubmed_search_async, crossref_search_async, arxiv_search_async, eric_search_async,
     s2_search_async, scholar_serpapi_async,
 )
+from app.utils.strings import strip_or_empty, norm_lower
 
 _RUBRIC = None
 
@@ -37,7 +38,7 @@ def plan_press(state):
     state["source_counts"] = state.get("source_counts") or {}
 
     # If a PRESS plan is already provided (e.g., via LICO run), keep it; otherwise create a default
-    q = (state.get("query") or "instructional design evidence synthesis").strip()
+    q = strip_or_empty(state.get("query") or "instructional design evidence synthesis")
     if not state.get("press"):
         year_min = os.getenv("PRESS_YEAR_MIN", "2019-")
         state["press"] = PressPlan(
@@ -63,11 +64,12 @@ def _dedupe_records(recs: List[RecordModel]) -> List[RecordModel]:
     for r in recs:
         # Exact matching by DOI/ID
         if config.deduplication.use_exact_matching:
-            key = (r.doi or r.pmid or r.arxiv_id or r.record_id or "").lower()
+            key_source = r.doi or r.pmid or r.arxiv_id or r.record_id
+            key = norm_lower(key_source)
             if key and key in seen_keys:
                 continue
         
-        title = (r.title or "").lower()
+        title = norm_lower(r.title)
         is_duplicate = False
         
         # Title similarity check
@@ -77,7 +79,7 @@ def _dedupe_records(recs: List[RecordModel]) -> List[RecordModel]:
         
         # Abstract similarity check (if enabled)
         if not is_duplicate and config.deduplication.abstract_similarity_enabled:
-            abstract = (r.abstract or "").lower()
+            abstract = norm_lower(r.abstract)
             if abstract and len(abstract) > 50:  # Only check substantial abstracts
                 abstract_threshold = config.deduplication.abstract_similarity_threshold
                 if any(fuzz.token_set_ratio(abstract, (o.abstract or "").lower()) >= abstract_threshold for o in out if o.abstract):
@@ -85,7 +87,7 @@ def _dedupe_records(recs: List[RecordModel]) -> List[RecordModel]:
         
         # Author similarity check (if enabled)
         if not is_duplicate and config.deduplication.author_similarity_enabled:
-            authors = (r.authors or "").lower()
+            authors = norm_lower(r.authors)
             if authors:
                 author_threshold = config.deduplication.author_similarity_threshold
                 if any(fuzz.token_set_ratio(authors, (o.authors or "").lower()) >= author_threshold for o in out if o.authors):
@@ -101,7 +103,7 @@ def _dedupe_records(recs: List[RecordModel]) -> List[RecordModel]:
 
 def harvest(state):
     t0 = time.perf_counter()
-    q = (state.get("query") or "instructional design evidence synthesis").strip()
+    q = strip_or_empty(state.get("query") or "instructional design evidence synthesis")
     mailto = os.getenv("CROSSREF_MAILTO")
 
     # PRESS year filter like "2019-"
@@ -118,7 +120,7 @@ def harvest(state):
     try:
         press = state.get("press")
         if press and getattr(press, "sources", None):
-            wanted = set([(s or "").strip() for s in press.sources or []])
+            wanted = set(strip_or_empty(s) for s in (press.sources or []))
     except Exception:
         wanted = set()
 
@@ -147,7 +149,7 @@ def harvest(state):
         if isinstance(batch, Exception) or not batch:
             continue
         for r in batch:
-            src = (r.get("source") or "Unknown").strip()
+            src = strip_or_empty(r.get("source") or "Unknown")
             per_src[src] = per_src.get(src, 0) + 1
             flattened.append(r)
 
@@ -188,8 +190,8 @@ def harvest(state):
     # Data quality validation - filter out incomplete records
     def is_valid_record(record):
         """Check if record has minimum required data quality"""
-        title = (record.get("title") or "").strip()
-        source = (record.get("source") or "").strip()
+        title = strip_or_empty(record.get("title"))
+        source = strip_or_empty(record.get("source"))
         
         # Must have title and source
         if not title or not source:
@@ -201,8 +203,8 @@ def harvest(state):
             return False
             
         # Prefer records with authors (but don't require)
-        authors = (record.get("authors") or "").strip()
-        abstract = (record.get("abstract") or "").strip()
+        authors = strip_or_empty(record.get("authors"))
+        abstract = strip_or_empty(record.get("abstract"))
         
         # At minimum, should have either authors or abstract 
         if not authors and not abstract:

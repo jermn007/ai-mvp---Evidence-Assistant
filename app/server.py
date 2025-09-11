@@ -19,6 +19,7 @@ from fastapi import Request
 from pydantic import BaseModel
 from sqlalchemy import select, or_, func, cast, case
 from sqlalchemy.types import Float as SA_Float
+from app.utils.strings import strip_or_empty, norm_lower
 
 # Load .env early so DATABASE_URL etc. are visible to build.py
 try:
@@ -47,6 +48,12 @@ from app.research_synthesizer import extract_study_findings, synthesize_research
 
 # --- DB compatibility layer (works with async or sync app.db) -----------------
 _db = importlib.import_module("app.db")
+# Ensure DB schema is initialized and compatible with latest models
+try:
+    if hasattr(_db, "init_db"):
+        _db.init_db()
+except Exception:
+    pass
 
 # Models (must exist)
 Record = getattr(_db, "Record")
@@ -132,6 +139,8 @@ async def _select_mappings(stmt):
 
 
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 app = FastAPI(title="Evidence Assistant (MVP)")
 
@@ -205,7 +214,7 @@ async def run(req: RunRequest):
                                              years=years)
         else:
             # Fallback to free-text query
-            init_state["query"] = (req.query or "").strip()
+            init_state["query"] = strip_or_empty(req.query)
 
         final = await GRAPH.ainvoke(init_state, config={"configurable": {"thread_id": tid}})
         run_id = persist_run(final)
@@ -240,7 +249,7 @@ def _pubmed_query_from_strategy(strat: PressStrategy | dict) -> tuple[str, Optio
     else:
         # Convert pydantic model to our NS for reuse
         ns = _NS(database=strat.database, interface=strat.interface, lines=[_NS(**ln.model_dump()) for ln in strat.lines])
-    qmap = _expand_lines_to_queries(ns.lines)  # type: ignore[arg-type]
+    qmap = _expand_lines_to_queries(getattr(ns, "lines", []) or [])  # type: ignore[arg-type]
     lines = getattr(ns, "lines", []) or []
     # Prefer Limits line, else last Combine, else highest line number
     last_n = None
@@ -275,13 +284,9 @@ def _pubmed_query_from_strategy(strat: PressStrategy | dict) -> tuple[str, Optio
     q_final = q_final or ""
     return q_final, years
 
-def _genericize_query(pubmed_q: str) -> str:
+def _genericize_query(pubmed_q: str | None) -> str:
     """Strip PubMed field tags and keep a textual boolean query suitable for general sources."""
-    # Safety check for None values
-    if pubmed_q is None:
-        return ""
-    
-    q = pubmed_q
+    q = strip_or_empty(pubmed_q)
     # Remove square-bracket tags like [tiab], [Mesh], [dp], [la]
     q = re.sub(r"\[[^\]]+\]", "", q)
     # Collapse excessive parentheses and whitespace
@@ -1154,15 +1159,15 @@ async def export_appraisals_page(
 
 # ======================= PRESS planner (LICO-aware) =======================
 
-def _split_terms(s: str) -> list[str]:
+def _split_terms(s: str | None) -> list[str]:
     """Split free text into candidate terms; keep the full phrase too if multiword."""
+    s = strip_or_empty(s)
     if not s:
         return []
-    s = s.strip()
     out = set()
     parts = re.split(r"[;,/]|(?i:\band\b)|(?i:\bor\b)", s)
     for p in parts:
-        p = p.strip()
+        p = strip_or_empty(p)
         if p:
             out.add(p)
     if " " in s:
@@ -1177,7 +1182,7 @@ def _tiab_expr(terms: list[str]) -> str:
     """
     out = []
     for t in terms:
-        qt = t.strip().strip('"')
+        qt = strip_or_empty(t).strip('"')
         if not qt:
             continue
         if " " in qt:
@@ -1191,7 +1196,7 @@ def _tiab_expr(terms: list[str]) -> str:
 
 def _load_press_template(name: str | None) -> dict:
     import yaml
-    tpl_name = (name or os.getenv("PRESS_TEMPLATE", "education")).strip().lower()
+    tpl_name = strip_or_empty(name or os.getenv("PRESS_TEMPLATE", "education")).lower()
     candidates = [
         os.path.join("app", "press_templates", f"{tpl_name}.yaml"),
         os.path.join("press_templates", f"{tpl_name}.yaml"),
@@ -1225,16 +1230,16 @@ def _press_strategy_medline(lico: LICO, *, template: str | None = None, use_stoc
     years = years_override or limits.get("years_default") or os.getenv("PRESS_YEAR_MIN", "2019-")
 
     lico_map = {
-        "learner": _split_terms((getattr(lico, 'learner', None) or "").strip()),
-        "intervention": _split_terms((getattr(lico, 'intervention', None) or "").strip()),
-        "context": _split_terms((getattr(lico, 'context', None) or "").strip()),
-        "outcome": _split_terms((getattr(lico, 'outcome', None) or "").strip()),
+        "learner": _split_terms(getattr(lico, 'learner', None)),
+        "intervention": _split_terms(getattr(lico, 'intervention', None)),
+        "context": _split_terms(getattr(lico, 'context', None)),
+        "outcome": _split_terms(getattr(lico, 'outcome', None)),
     }
 
     # Build facet lines; skip empty ones, then number sequentially
     raw_facet_lines = []
     for facet in facets:
-        fname = str(facet.get("name", "")).strip().lower()
+        fname = strip_or_empty(facet.get("name", "")).lower()
         mesh = facet.get("mesh") or []
         tw = facet.get("text_words") or []
         l_terms: list[str] = []
@@ -1291,10 +1296,10 @@ def plan_press_from_lico(lico: LICO, databases: Optional[List[DatabaseSpec]] = N
     strat = _press_strategy_medline(lico, template=template, use_stock=use_stock, db_name=db.name or "MEDLINE", interface=db.interface or "PubMed", years_override=years)
 
     has_custom = any([
-        (getattr(lico, 'learner', None) or "").strip(),
-        (getattr(lico, 'intervention', None) or "").strip(),
-        (getattr(lico, 'context', None) or "").strip(),
-        (getattr(lico, 'outcome', None) or "").strip()
+        strip_or_empty(getattr(lico, 'learner', None)),
+        strip_or_empty(getattr(lico, 'intervention', None)),
+        strip_or_empty(getattr(lico, 'context', None)),
+        strip_or_empty(getattr(lico, 'outcome', None)),
     ])
     checklist = {
         "translation": "pass",

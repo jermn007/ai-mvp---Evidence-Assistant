@@ -118,8 +118,98 @@ class PrismaCounts(Base):
     run = relationship("SearchRun", back_populates="prisma")
     
 
+def _ensure_sqlite_schema_compat() -> None:
+    """Ensure existing SQLite tables have newly added columns without Alembic.
+    Safe no-op if columns already exist. Only runs for SQLite URLs.
+    """
+    try:
+        if not (DB_URL.startswith("sqlite:///") or DB_URL.startswith("sqlite:///") or DB_URL.startswith("sqlite:")):
+            return
+        with engine.begin() as conn:
+            # Helper to fetch current columns
+            def cols(table: str) -> set[str]:
+                res = conn.exec_driver_sql(f"PRAGMA table_info({table})")
+                return {str(r[1]) for r in res.fetchall()}
+
+            # records extended columns
+            # records table should exist after create_all; fetch columns
+            rec_cols = set()
+            try:
+                rec_cols = cols("records")
+            except Exception:
+                rec_cols = set()
+            add_actions: list[tuple[str, str]] = []
+            def add_if_missing(name: str, type_sql: str):
+                if name not in rec_cols:
+                    add_actions.append((name, type_sql))
+
+            # Base columns that might be missing in older DBs
+            add_if_missing("authors", "TEXT")
+            add_if_missing("publication_type", "VARCHAR")
+            # Extended metadata
+            add_if_missing("journal", "VARCHAR")
+            add_if_missing("conference", "VARCHAR")
+            add_if_missing("publisher", "VARCHAR")
+            add_if_missing("volume", "VARCHAR")
+            add_if_missing("issue", "VARCHAR")
+            add_if_missing("pages", "VARCHAR")
+            add_if_missing("language", "VARCHAR")
+            add_if_missing("country", "VARCHAR")
+            add_if_missing("pmid", "VARCHAR")
+            add_if_missing("arxiv_id", "VARCHAR")
+            add_if_missing("issn", "VARCHAR")
+            add_if_missing("isbn", "VARCHAR")
+            add_if_missing("subjects", "TEXT")
+            add_if_missing("mesh_terms", "TEXT")
+            add_if_missing("pdf_url", "TEXT")
+            add_if_missing("fulltext_url", "TEXT")
+            add_if_missing("open_access", "BOOLEAN")
+            add_if_missing("cited_by_count", "INTEGER")
+            add_if_missing("reference_count", "INTEGER")
+
+            for name, type_sql in add_actions:
+                try:
+                    conn.exec_driver_sql(f"ALTER TABLE records ADD COLUMN {name} {type_sql}")
+                except Exception:
+                    # ignore if already exists due to race or different casing
+                    pass
+
+            # Optional indexes
+            try:
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_run_id ON records(run_id)")
+            except Exception:
+                pass
+            try:
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_doi ON records(doi)")
+            except Exception:
+                pass
+            try:
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_pmid ON records(pmid)")
+            except Exception:
+                pass
+            try:
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_records_arxiv_id ON records(arxiv_id)")
+            except Exception:
+                pass
+
+            # Ensure appraisals.score_final exists
+            try:
+                app_cols = cols("appraisals")
+            except Exception:
+                app_cols = set()
+            if "score_final" not in app_cols:
+                try:
+                    conn.exec_driver_sql("ALTER TABLE appraisals ADD COLUMN score_final FLOAT")
+                except Exception:
+                    pass
+    except Exception:
+        # Never block app startup on best-effort schema patching
+        pass
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    _ensure_sqlite_schema_compat()
 
 def get_session():
     return SessionLocal()

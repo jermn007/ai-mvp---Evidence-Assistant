@@ -113,11 +113,10 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
         try {
           const extractResult = await apiClient.extractLicoFromQuestion(researchQuestion)
           licoToUse = extractResult.lico
-          // Update the state with extracted LICO components
+          // Update the state with extracted LICO components (set unconditionally)
           Object.entries(extractResult.lico).forEach(([key, value]) => {
-            if (value && value.trim() !== '') {
-              handleLicoChange(key as keyof LICO, value)
-            }
+            const val = typeof value === 'string' ? value : (value ?? '')
+            handleLicoChange(key as keyof LICO, val)
           })
           setError('✅ LICO components automatically extracted from your research question')
         } catch (extractError) {
