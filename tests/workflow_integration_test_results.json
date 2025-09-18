@@ -1,0 +1,566 @@
+{
+  "timestamp": "2025-09-18 08:32:51",
+  "test_type": "workflow_integration",
+  "base_url": "http://localhost:8000",
+  "workflows": [
+    {
+      "steps": [
+        {
+          "step": "PRESS Planning",
+          "status": "PASS",
+          "response_code": 200,
+          "has_strategies": true,
+          "has_checklist": true,
+          "data": {
+            "question_lico": {
+              "learner": "medical students",
+              "intervention": "virtual reality simulation",
+              "context": "surgical skills training",
+              "outcome": "technical competency scores"
+            },
+            "strategies": {
+              "MEDLINE": {
+                "database": "MEDLINE",
+                "interface": "PubMed",
+                "lines": [
+                  {
+                    "n": 1,
+                    "type": "Learner",
+                    "text": "(\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh] OR \"medical student*\"[tiab] OR \"nursing student*\"[tiab] OR \"allied health student*\"[tiab] OR resident*[tiab] OR trainee*[tiab] OR \"medical students\"[tiab])",
+                    "hits": null
+                  },
+                  {
+                    "n": 2,
+                    "type": "Intervention",
+                    "text": "(\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh] OR \"interprofessional education\"[tiab] OR simulation-based*[tiab] OR \"active learning\"[tiab] OR \"team-based learning\"[tiab] OR \"problem-based learning\"[tiab] OR \"virtual reality simulation\"[tiab])",
+                    "hits": null
+                  },
+                  {
+                    "n": 3,
+                    "type": "Context",
+                    "text": "(\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh] OR universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR \"clinical placement\"[tiab] OR classroom*[tiab] OR \"surgical skills training\"[tiab])",
+                    "hits": null
+                  },
+                  {
+                    "n": 4,
+                    "type": "Outcome",
+                    "text": "(\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh] OR attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR \"patient outcome*\"[tiab] OR \"technical competency scores\"[tiab])",
+                    "hits": null
+                  },
+                  {
+                    "n": 5,
+                    "type": "Combine",
+                    "text": "1 AND 2 AND 3 AND 4",
+                    "hits": null
+                  },
+                  {
+                    "n": 6,
+                    "type": "Limits",
+                    "text": "2015:3000[dp] AND English[la] AND Humans[Mesh]",
+                    "hits": null
+                  }
+                ]
+              }
+            },
+            "checklist": {
+              "MEDLINE": {
+                "translation": "pass",
+                "subject_headings": "pass",
+                "text_words": "pass",
+                "spelling_syntax_lines": "pass",
+                "limits_filters": "pass",
+                "notes": "Auto-checks are heuristic; librarian review recommended."
+              }
+            }
+          }
+        },
+        {
+          "step": "Query Generation",
+          "status": "PASS",
+          "response_code": 200,
+          "has_pubmed_query": true,
+          "has_generic_query": true,
+          "data": {
+            "query_pubmed": "(((\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh] OR \"medical student*\"[tiab] OR \"nursing student*\"[tiab] OR \"allied health student*\"[tiab] OR resident*[tiab] OR trainee*[tiab] OR \"medical students\"[tiab])) AND ((\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh] OR \"interprofessional education\"[tiab] OR simulation-based*[tiab] OR \"active learning\"[tiab] OR \"team-based learning\"[tiab] OR \"problem-based learning\"[tiab] OR \"virtual reality simulation\"[tiab])) AND ((\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh] OR universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR \"clinical placement\"[tiab] OR classroom*[tiab] OR \"surgical skills training\"[tiab])) AND ((\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh] OR attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR \"patient outcome*\"[tiab] OR \"technical competency scores\"[tiab]))) AND (2015:3000[dp] AND English[la] AND Humans[Mesh])",
+            "query_generic": "(((\"Students, Health Occupations\" OR \"Education, Medical\" OR \"Education, Nursing\" OR \"medical student*\" OR \"nursing student*\" OR \"allied health student*\" OR resident* OR trainee* OR \"medical students\")) AND ((\"Education, Interprofessional\" OR \"Education, Professional\" OR \"Teaching\" OR \"interprofessional education\" OR simulation-based* OR \"active learning\" OR \"team-based learning\" OR \"problem-based learning\" OR \"virtual reality simulation\")) AND ((\"Schools, Medical\" OR \"Schools, Nursing\" OR \"Clinical Clerkship\" OR universit* OR college* OR prelicen* OR \"clinical placement\" OR classroom* OR \"surgical skills training\")) AND ((\"Education Measurement\" OR \"Clinical Competence\" OR attitude* OR knowledge* OR skill* OR behavior* OR \"patient outcome*\" OR \"technical competency scores\"))) AND (2015:3000 AND English AND Humans)",
+            "years": "2015-"
+          }
+        },
+        {
+          "step": "Workflow Execution",
+          "status": "PASS",
+          "response_code": 200,
+          "run_id": "83c0b9c1-7a24-4b0a-a250-3cde11836344",
+          "has_prisma": true,
+          "n_appraised": 1,
+          "data": {
+            "thread_id": "9daec1b8-0ec1-43e0-865e-1033fbb3c0ca",
+            "run_id": "83c0b9c1-7a24-4b0a-a250-3cde11836344",
+            "prisma": {
+              "identified": 6,
+              "deduped": 6,
+              "screened": 6,
+              "excluded": 5,
+              "eligible": 1,
+              "included": 1
+            },
+            "n_appraised": 1,
+            "ratings": [
+              "Amber"
+            ],
+            "query_generic": "(((\"Students, Health Occupations\" OR \"Education, Medical\" OR \"Education, Nursing\" OR \"medical student*\" OR \"nursing student*\" OR \"allied health student*\" OR resident* OR trainee* OR \"medical students\")) AND ((\"Education, Interprofessional\" OR \"Education, Professional\" OR \"Teaching\" OR \"interprofessional education\" OR simulation-based* OR \"active learning\" OR \"team-based learning\" OR \"problem-based learning\" OR \"virtual reality simulation\")) AND ((\"Schools, Medical\" OR \"Schools, Nursing\" OR \"Clinical Clerkship\" OR universit* OR college* OR prelicen* OR \"clinical placement\" OR classroom* OR \"surgical skills training\")) AND ((\"Education Measurement\" OR \"Clinical Competence\" OR attitude* OR knowledge* OR skill* OR behavior* OR \"patient outcome*\" OR \"technical competency scores\"))) AND (2015:3000 AND English AND Humans)",
+            "query_pubmed": "(((\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh] OR \"medical student*\"[tiab] OR \"nursing student*\"[tiab] OR \"allied health student*\"[tiab] OR resident*[tiab] OR trainee*[tiab] OR \"medical students\"[tiab])) AND ((\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh] OR \"interprofessional education\"[tiab] OR simulation-based*[tiab] OR \"active learning\"[tiab] OR \"team-based learning\"[tiab] OR \"problem-based learning\"[tiab] OR \"virtual reality simulation\"[tiab])) AND ((\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh] OR universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR \"clinical placement\"[tiab] OR classroom*[tiab] OR \"surgical skills training\"[tiab])) AND ((\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh] OR attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR \"patient outcome*\"[tiab] OR \"technical competency scores\"[tiab]))) AND (2015:3000[dp] AND English[la] AND Humans[Mesh])",
+            "years": "2015-"
+          }
+        },
+        {
+          "step": "Results Validation",
+          "status": "PASS",
+          "response_code": 200,
+          "n_records": 6,
+          "n_appraisals": 1,
+          "has_prisma_counts": true,
+          "data": {
+            "run": {
+              "id": "83c0b9c1-7a24-4b0a-a250-3cde11836344",
+              "query": "(((\"Students, Health Occupations\" OR \"Education, Medical\" OR \"Education, Nursing\" OR \"medical student*\" OR \"nursing student*\" OR \"allied health student*\" OR resident* OR trainee* OR \"medical students\")) AND ((\"Education, Interprofessional\" OR \"Education, Professional\" OR \"Teaching\" OR \"interprofessional education\" OR simulation-based* OR \"active learning\" OR \"team-based learning\" OR \"problem-based learning\" OR \"virtual reality simulation\")) AND ((\"Schools, Medical\" OR \"Schools, Nursing\" OR \"Clinical Clerkship\" OR universit* OR college* OR prelicen* OR \"clinical placement\" OR classroom* OR \"surgical skills training\")) AND ((\"Education Measurement\" OR \"Clinical Competence\" OR attitude* OR knowledge* OR skill* OR behavior* OR \"patient outcome*\" OR \"technical competency scores\"))) AND (2015:3000 AND English AND Humans)",
+              "created_at": "2025-09-18T12:32:53.996673"
+            },
+            "counts": {
+              "identified": 6,
+              "deduped": 6,
+              "screened": 6,
+              "excluded": 5,
+              "eligible": 1,
+              "included": 1
+            },
+            "exclude_reasons": {
+              "Pre-2018": 5
+            },
+            "n_records": 6,
+            "n_appraisals": 1,
+            "label_counts": {
+              "Amber": 1
+            },
+            "source_counts_kept": {
+              "PubMed": 1,
+              "Unknown": 5
+            },
+            "timings": {}
+          }
+        },
+        {
+          "step": "Export Validation",
+          "status": "PASS",
+          "exports_tested": 3,
+          "exports_successful": 3,
+          "export_details": {
+            "Records JSON": {
+              "success": true,
+              "size_bytes": 1854
+            },
+            "Appraisals JSON": {
+              "success": true,
+              "size_bytes": 447
+            },
+            "PRISMA Summary": {
+              "success": true,
+              "size_bytes": 172
+            }
+          }
+        }
+      ],
+      "overall_status": "PASS",
+      "duration_seconds": 5.385321140289307,
+      "data_collected": {
+        "run_id": "83c0b9c1-7a24-4b0a-a250-3cde11836344",
+        "lico_used": {
+          "learner": "medical students",
+          "intervention": "virtual reality simulation",
+          "context": "surgical skills training",
+          "outcome": "technical competency scores"
+        },
+        "press_plan": {
+          "question_lico": {
+            "learner": "medical students",
+            "intervention": "virtual reality simulation",
+            "context": "surgical skills training",
+            "outcome": "technical competency scores"
+          },
+          "strategies": {
+            "MEDLINE": {
+              "database": "MEDLINE",
+              "interface": "PubMed",
+              "lines": [
+                {
+                  "n": 1,
+                  "type": "Learner",
+                  "text": "(\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh] OR \"medical student*\"[tiab] OR \"nursing student*\"[tiab] OR \"allied health student*\"[tiab] OR resident*[tiab] OR trainee*[tiab] OR \"medical students\"[tiab])",
+                  "hits": null
+                },
+                {
+                  "n": 2,
+                  "type": "Intervention",
+                  "text": "(\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh] OR \"interprofessional education\"[tiab] OR simulation-based*[tiab] OR \"active learning\"[tiab] OR \"team-based learning\"[tiab] OR \"problem-based learning\"[tiab] OR \"virtual reality simulation\"[tiab])",
+                  "hits": null
+                },
+                {
+                  "n": 3,
+                  "type": "Context",
+                  "text": "(\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh] OR universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR \"clinical placement\"[tiab] OR classroom*[tiab] OR \"surgical skills training\"[tiab])",
+                  "hits": null
+                },
+                {
+                  "n": 4,
+                  "type": "Outcome",
+                  "text": "(\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh] OR attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR \"patient outcome*\"[tiab] OR \"technical competency scores\"[tiab])",
+                  "hits": null
+                },
+                {
+                  "n": 5,
+                  "type": "Combine",
+                  "text": "1 AND 2 AND 3 AND 4",
+                  "hits": null
+                },
+                {
+                  "n": 6,
+                  "type": "Limits",
+                  "text": "2015:3000[dp] AND English[la] AND Humans[Mesh]",
+                  "hits": null
+                }
+              ]
+            }
+          },
+          "checklist": {
+            "MEDLINE": {
+              "translation": "pass",
+              "subject_headings": "pass",
+              "text_words": "pass",
+              "spelling_syntax_lines": "pass",
+              "limits_filters": "pass",
+              "notes": "Auto-checks are heuristic; librarian review recommended."
+            }
+          }
+        },
+        "queries_generated": {
+          "query_pubmed": "(((\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh] OR \"medical student*\"[tiab] OR \"nursing student*\"[tiab] OR \"allied health student*\"[tiab] OR resident*[tiab] OR trainee*[tiab] OR \"medical students\"[tiab])) AND ((\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh] OR \"interprofessional education\"[tiab] OR simulation-based*[tiab] OR \"active learning\"[tiab] OR \"team-based learning\"[tiab] OR \"problem-based learning\"[tiab] OR \"virtual reality simulation\"[tiab])) AND ((\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh] OR universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR \"clinical placement\"[tiab] OR classroom*[tiab] OR \"surgical skills training\"[tiab])) AND ((\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh] OR attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR \"patient outcome*\"[tiab] OR \"technical competency scores\"[tiab]))) AND (2015:3000[dp] AND English[la] AND Humans[Mesh])",
+          "query_generic": "(((\"Students, Health Occupations\" OR \"Education, Medical\" OR \"Education, Nursing\" OR \"medical student*\" OR \"nursing student*\" OR \"allied health student*\" OR resident* OR trainee* OR \"medical students\")) AND ((\"Education, Interprofessional\" OR \"Education, Professional\" OR \"Teaching\" OR \"interprofessional education\" OR simulation-based* OR \"active learning\" OR \"team-based learning\" OR \"problem-based learning\" OR \"virtual reality simulation\")) AND ((\"Schools, Medical\" OR \"Schools, Nursing\" OR \"Clinical Clerkship\" OR universit* OR college* OR prelicen* OR \"clinical placement\" OR classroom* OR \"surgical skills training\")) AND ((\"Education Measurement\" OR \"Clinical Competence\" OR attitude* OR knowledge* OR skill* OR behavior* OR \"patient outcome*\" OR \"technical competency scores\"))) AND (2015:3000 AND English AND Humans)",
+          "years": "2015-"
+        },
+        "final_summary": {
+          "run": {
+            "id": "83c0b9c1-7a24-4b0a-a250-3cde11836344",
+            "query": "(((\"Students, Health Occupations\" OR \"Education, Medical\" OR \"Education, Nursing\" OR \"medical student*\" OR \"nursing student*\" OR \"allied health student*\" OR resident* OR trainee* OR \"medical students\")) AND ((\"Education, Interprofessional\" OR \"Education, Professional\" OR \"Teaching\" OR \"interprofessional education\" OR simulation-based* OR \"active learning\" OR \"team-based learning\" OR \"problem-based learning\" OR \"virtual reality simulation\")) AND ((\"Schools, Medical\" OR \"Schools, Nursing\" OR \"Clinical Clerkship\" OR universit* OR college* OR prelicen* OR \"clinical placement\" OR classroom* OR \"surgical skills training\")) AND ((\"Education Measurement\" OR \"Clinical Competence\" OR attitude* OR knowledge* OR skill* OR behavior* OR \"patient outcome*\" OR \"technical competency scores\"))) AND (2015:3000 AND English AND Humans)",
+            "created_at": "2025-09-18T12:32:53.996673"
+          },
+          "counts": {
+            "identified": 6,
+            "deduped": 6,
+            "screened": 6,
+            "excluded": 5,
+            "eligible": 1,
+            "included": 1
+          },
+          "exclude_reasons": {
+            "Pre-2018": 5
+          },
+          "n_records": 6,
+          "n_appraisals": 1,
+          "label_counts": {
+            "Amber": 1
+          },
+          "source_counts_kept": {
+            "PubMed": 1,
+            "Unknown": 5
+          },
+          "timings": {}
+        },
+        "export_validation": {
+          "Records JSON": {
+            "success": true,
+            "size_bytes": 1854
+          },
+          "Appraisals JSON": {
+            "success": true,
+            "size_bytes": 447
+          },
+          "PRISMA Summary": {
+            "success": true,
+            "size_bytes": 172
+          }
+        }
+      },
+      "workflow_name": "Complete LICO-based Workflow",
+      "timestamp": "08:32:57"
+    },
+    {
+      "steps": [
+        {
+          "step": "Simple Query Execution",
+          "status": "PASS",
+          "response_code": 200,
+          "run_id": "7d8f93d6-b95a-4acb-a681-8555e44010a1",
+          "has_prisma": true,
+          "data": {
+            "thread_id": "5c5a1b84-c39c-4212-a381-df19d140cfb2",
+            "run_id": "7d8f93d6-b95a-4acb-a681-8555e44010a1",
+            "prisma": {
+              "identified": 145,
+              "deduped": 114,
+              "screened": 114,
+              "excluded": 29,
+              "eligible": 85,
+              "included": 1
+            },
+            "n_appraised": 1,
+            "ratings": [
+              "Amber"
+            ]
+          }
+        },
+        {
+          "step": "Results Validation",
+          "status": "PASS",
+          "response_code": 200,
+          "n_records": 114,
+          "data": {
+            "run": {
+              "id": "7d8f93d6-b95a-4acb-a681-8555e44010a1",
+              "query": "machine learning in medical education effectiveness",
+              "created_at": "2025-09-18T12:33:06.587016"
+            },
+            "counts": {
+              "identified": 145,
+              "deduped": 114,
+              "screened": 114,
+              "excluded": 29,
+              "eligible": 85,
+              "included": 1
+            },
+            "exclude_reasons": {
+              "Animal study": 1,
+              "Non-English": 5,
+              "Not primary research": 14,
+              "Not relevant": 8,
+              "Study type": 1
+            },
+            "n_records": 114,
+            "n_appraisals": 1,
+            "label_counts": {
+              "Amber": 1
+            },
+            "source_counts_kept": {
+              "Crossref": 13,
+              "ERIC": 9,
+              "GoogleScholar": 14,
+              "PubMed": 14,
+              "SemanticScholar": 13,
+              "Unknown": 29,
+              "arXiv": 22
+            },
+            "timings": {}
+          }
+        }
+      ],
+      "overall_status": "PASS",
+      "duration_seconds": 12.614896774291992,
+      "workflow_name": "Simple Query Workflow",
+      "timestamp": "08:33:09"
+    },
+    {
+      "steps": [
+        {
+          "step": "AI-Enhanced PRESS Planning",
+          "status": "PASS",
+          "response_code": 200,
+          "has_base_plan": true,
+          "has_ai_enhancement": false,
+          "has_strategy_analysis": false,
+          "ai_available": true,
+          "data": {
+            "base_plan": {
+              "question_lico": {
+                "learner": "pharmacy students",
+                "intervention": "case-based learning",
+                "context": "clinical pharmacy education",
+                "outcome": "problem-solving skills"
+              },
+              "strategies": {
+                "MEDLINE": {
+                  "database": "MEDLINE",
+                  "interface": "PubMed",
+                  "lines": [
+                    {
+                      "n": 1,
+                      "type": "Learner",
+                      "text": "(\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh] OR \"medical student*\"[tiab] OR \"nursing student*\"[tiab] OR \"allied health student*\"[tiab] OR resident*[tiab] OR trainee*[tiab] OR \"pharmacy students\"[tiab])",
+                      "hits": null
+                    },
+                    {
+                      "n": 2,
+                      "type": "Intervention",
+                      "text": "(\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh] OR \"interprofessional education\"[tiab] OR simulation-based*[tiab] OR \"active learning\"[tiab] OR \"team-based learning\"[tiab] OR \"problem-based learning\"[tiab] OR \"case-based learning\"[tiab])",
+                      "hits": null
+                    },
+                    {
+                      "n": 3,
+                      "type": "Context",
+                      "text": "(\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh] OR universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR \"clinical placement\"[tiab] OR classroom*[tiab] OR \"clinical pharmacy education\"[tiab])",
+                      "hits": null
+                    },
+                    {
+                      "n": 4,
+                      "type": "Outcome",
+                      "text": "(\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh] OR attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR \"patient outcome*\"[tiab] OR \"problem-solving skills\"[tiab])",
+                      "hits": null
+                    },
+                    {
+                      "n": 5,
+                      "type": "Combine",
+                      "text": "1 AND 2 AND 3 AND 4",
+                      "hits": null
+                    },
+                    {
+                      "n": 6,
+                      "type": "Limits",
+                      "text": "2015:3000[dp] AND English[la] AND Humans[Mesh]",
+                      "hits": null
+                    }
+                  ]
+                }
+              },
+              "checklist": {
+                "MEDLINE": {
+                  "translation": "pass",
+                  "subject_headings": "pass",
+                  "text_words": "pass",
+                  "spelling_syntax_lines": "pass",
+                  "limits_filters": "pass",
+                  "notes": "Auto-checks are heuristic; librarian review recommended."
+                }
+              }
+            },
+            "ai_enhancement": null,
+            "strategy_analysis": null,
+            "ai_available": true
+          }
+        },
+        {
+          "step": "LICO AI Enhancement",
+          "status": "PASS",
+          "response_code": 200,
+          "data": null
+        }
+      ],
+      "overall_status": "PASS",
+      "duration_seconds": 64.20788145065308,
+      "workflow_name": "AI-Enhanced Workflow",
+      "timestamp": "08:34:13"
+    },
+    {
+      "steps": [
+        {
+          "step": "Invalid LICO Handling",
+          "status": "PASS",
+          "response_code": 200,
+          "handled_gracefully": true
+        },
+        {
+          "step": "Malformed Request Handling",
+          "status": "FAIL",
+          "response_code": 200,
+          "handled_gracefully": false
+        },
+        {
+          "step": "Non-existent Run ID Handling",
+          "status": "FAIL",
+          "response_code": 200,
+          "returned_404": false,
+          "handled_gracefully": false
+        }
+      ],
+      "overall_status": "FAIL",
+      "duration_seconds": 31.401638984680176,
+      "workflow_name": "Workflow Error Handling",
+      "timestamp": "08:34:45"
+    },
+    {
+      "steps": [
+        {
+          "step": "Response Time Testing",
+          "status": "PASS",
+          "endpoints_tested": 5,
+          "successful_responses": 5,
+          "fast_responses_under_1s": 4,
+          "response_times": {
+            "Health Check": {
+              "response_time_ms": 1.5194416046142578,
+              "status_code": 200,
+              "success": true
+            },
+            "Sources Test": {
+              "response_time_ms": 9706.43138885498,
+              "status_code": 200,
+              "success": true
+            },
+            "AI Status": {
+              "response_time_ms": 1.0008811950683594,
+              "status_code": 200,
+              "success": true
+            },
+            "Run Summary": {
+              "response_time_ms": 3.447294235229492,
+              "status_code": 200,
+              "success": true
+            },
+            "Records Export": {
+              "response_time_ms": 1.001119613647461,
+              "status_code": 200,
+              "success": true
+            }
+          }
+        }
+      ],
+      "overall_status": "PASS",
+      "duration_seconds": 9.71340012550354,
+      "performance_metrics": {
+        "Health Check": {
+          "response_time_ms": 1.5194416046142578,
+          "status_code": 200,
+          "success": true
+        },
+        "Sources Test": {
+          "response_time_ms": 9706.43138885498,
+          "status_code": 200,
+          "success": true
+        },
+        "AI Status": {
+          "response_time_ms": 1.0008811950683594,
+          "status_code": 200,
+          "success": true
+        },
+        "Run Summary": {
+          "response_time_ms": 3.447294235229492,
+          "status_code": 200,
+          "success": true
+        },
+        "Records Export": {
+          "response_time_ms": 1.001119613647461,
+          "status_code": 200,
+          "success": true
+        }
+      },
+      "workflow_name": "Workflow Performance Testing",
+      "timestamp": "08:34:55"
+    }
+  ],
+  "summary": {
+    "total_workflows": 5,
+    "passed": 4,
+    "failed": 1,
+    "errors": 0,
+    "skipped": 0,
+    "success_rate": "80.0%",
+    "total_duration": 123.32313847541809
+  }
+}

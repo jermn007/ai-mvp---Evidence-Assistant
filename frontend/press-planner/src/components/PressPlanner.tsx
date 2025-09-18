@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo, memo, useEffect } from 'react'
 import { ApiClient } from '../services/apiClient'
 import type { LICO, LICOEnhancement, PressPlan, AiEnhancedPlan } from '../services/apiClient'
 import { ResearchInput } from './ResearchInput'
@@ -33,10 +33,32 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
   const [aiEnhancement, setAiEnhancement] = useState<LICOEnhancement | null>(null)
   const [pressPlan, setPressPlan] = useState<PressPlan | null>(null)
   const [strategyAnalysis, setStrategyAnalysis] = useState<any>(null)
-  
+
   // State for run execution
   const [runResult, setRunResult] = useState<any>(null)
   const [isRunning, setIsRunning] = useState<boolean>(false)
+
+  // Cleanup effect to cancel pending requests
+  useEffect(() => {
+    return () => {
+      apiClient.cancelAllRequests()
+    }
+  }, [apiClient])
+
+  // Memoize validation logic
+  const validationState = useMemo(() => {
+    const hasLicoContent = Object.values(lico).some(value => value.trim() !== '')
+    const hasQuestionContent = researchQuestion.trim() !== ''
+    const canBuildPlan = hasLicoContent || hasQuestionContent
+    const canRunWorkflow = pressPlan !== null
+
+    return {
+      hasLicoContent,
+      hasQuestionContent,
+      canBuildPlan,
+      canRunWorkflow
+    }
+  }, [lico, researchQuestion, pressPlan])
 
   const handleLicoChange = useCallback((field: keyof LICO, value: string) => {
     setLico(prev => ({ ...prev, [field]: value }))
@@ -97,19 +119,21 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
   }, [apiClient, lico, aiAvailable])
 
   const handleBuildPlan = useCallback(async () => {
+    if (!validationState.canBuildPlan) {
+      setError('Please provide either LICO components or a research question')
+      return
+    }
+
     setLoading(true)
     setError('')
     setPressPlan(null)
     setStrategyAnalysis(null)
-    
+
     try {
       let licoToUse = lico
-      
+
       // If LICO fields are mostly empty but we have a research question, try to extract LICO first
-      const hasLicoContent = Object.values(lico).some(value => value.trim() !== '')
-      const hasQuestionContent = researchQuestion.trim() !== ''
-      
-      if (!hasLicoContent && hasQuestionContent && aiAvailable) {
+      if (!validationState.hasLicoContent && validationState.hasQuestionContent && aiAvailable) {
         try {
           const extractResult = await apiClient.extractLicoFromQuestion(researchQuestion)
           licoToUse = extractResult.lico
@@ -156,10 +180,10 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
     } finally {
       setLoading(false)
     }
-  }, [apiClient, lico, researchQuestion, template, useStock, enableAi, aiAvailable, handleLicoChange])
+  }, [apiClient, lico, researchQuestion, template, useStock, enableAi, aiAvailable, handleLicoChange, validationState])
 
   const handleRunWithPlan = useCallback(async () => {
-    if (!pressPlan) {
+    if (!validationState.canRunWorkflow) {
       setError('Please build a PRESS plan first')
       return
     }
@@ -169,11 +193,11 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
     setError('')
 
     try {
-      const result = await apiClient.runWithPlan(pressPlan)
+      const result = await apiClient.runWithPlan(pressPlan!)
       console.log('Run execution started:', result)
       setRunResult(result)
       setError(`✅ Literature review started successfully! Run ID: ${result.run_id}`)
-      
+
       // Notify parent component about the completed run
       if (onRunComplete && result.run_id) {
         onRunComplete(result.run_id, result)
@@ -184,7 +208,7 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
     } finally {
       setIsRunning(false)
     }
-  }, [apiClient, pressPlan])
+  }, [apiClient, pressPlan, validationState.canRunWorkflow, onRunComplete])
 
   return (
     <div className="press-planner">
@@ -298,24 +322,25 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
 
           {/* Build Plan Button */}
           <div className="card">
-            <button 
+            <button
               className="build-plan-btn"
               onClick={handleBuildPlan}
-              disabled={loading}
+              disabled={loading || !validationState.canBuildPlan}
+              title={!validationState.canBuildPlan ? 'Please provide LICO components or research question' : ''}
             >
               {loading ? 'Building Plan...' : '🚀 Build PRESS Plan'}
             </button>
           </div>
 
           {/* Run with Plan Button */}
-          {pressPlan && (
+          {validationState.canRunWorkflow && (
             <div className="card">
               <h3>🚀 Execute Literature Review</h3>
               <p>Run the complete systematic review workflow with your PRESS plan</p>
-              <button 
+              <button
                 className="build-plan-btn run-btn"
                 onClick={handleRunWithPlan}
-                disabled={isRunning || loading}
+                disabled={isRunning || loading || !validationState.canRunWorkflow}
               >
                 {isRunning ? '⏳ Running Literature Review...' : '🔬 Run with Plan'}
               </button>

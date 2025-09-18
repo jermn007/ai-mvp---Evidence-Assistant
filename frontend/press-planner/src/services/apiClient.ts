@@ -77,28 +77,90 @@ export interface ResearchSynthesis {
 
 export class ApiClient {
   private baseUrl: string
+  private abortControllers: Map<string, AbortController> = new Map()
+  private requestCache: Map<string, { data: any; timestamp: number }> = new Map()
+  private readonly CACHE_TTL = 5 * 60 * 1000 // 5 minutes cache
 
   constructor(baseUrl: string = 'http://127.0.0.1:8000') {
     this.baseUrl = baseUrl.replace(/\/$/, '')
   }
 
-  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
-    const url = `${this.baseUrl}${endpoint}`
-    
-    const response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
-      ...options,
-    })
+  private getCacheKey(endpoint: string, options?: RequestInit): string {
+    return `${endpoint}:${JSON.stringify(options?.body || {})}`
+  }
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`API Error (${response.status}): ${errorText}`)
+  private getFromCache<T>(key: string): T | null {
+    const cached = this.requestCache.get(key)
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.data
+    }
+    return null
+  }
+
+  private setCache<T>(key: string, data: T): void {
+    this.requestCache.set(key, { data, timestamp: Date.now() })
+  }
+
+  private createAbortController(key: string): AbortController {
+    // Cancel any existing request for this key
+    this.abortControllers.get(key)?.abort()
+
+    const controller = new AbortController()
+    this.abortControllers.set(key, controller)
+    return controller
+  }
+
+  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+    const cacheKey = this.getCacheKey(endpoint, options)
+
+    // Check cache for GET requests
+    if (!options?.method || options.method === 'GET') {
+      const cached = this.getFromCache<T>(cacheKey)
+      if (cached) {
+        return cached
+      }
     }
 
-    return response.json()
+    const url = `${this.baseUrl}${endpoint}`
+    const controller = this.createAbortController(cacheKey)
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'Content-Type': 'application/json',
+          ...options?.headers,
+        },
+        signal: controller.signal,
+        ...options,
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`API Error (${response.status}): ${errorText}`)
+      }
+
+      const data = await response.json()
+
+      // Cache successful GET requests
+      if (!options?.method || options.method === 'GET') {
+        this.setCache(cacheKey, data)
+      }
+
+      return data
+    } finally {
+      this.abortControllers.delete(cacheKey)
+    }
+  }
+
+  // Cancel all pending requests
+  cancelAllRequests(): void {
+    this.abortControllers.forEach(controller => controller.abort())
+    this.abortControllers.clear()
+  }
+
+  // Clear cache
+  clearCache(): void {
+    this.requestCache.clear()
   }
 
   // AI Status and Health

@@ -1,0 +1,87 @@
+{
+  "timestamp": "2025-09-17 18:38:11",
+  "tests": [
+    {
+      "name": "Health Check",
+      "status": "PASS",
+      "response_code": 200,
+      "data": {
+        "ok": true,
+        "env": true
+      }
+    },
+    {
+      "name": "Sources Test",
+      "status": "PASS",
+      "response_code": 200,
+      "sources_count": 4,
+      "data": {
+        "query": "active learning in higher education",
+        "max_n": 5,
+        "year_min": 2019,
+        "sources": {
+          "PubMed": {
+            "count": 5
+          },
+          "Crossref": {
+            "count": 5
+          },
+          "arXiv": {
+            "count": 5
+          },
+          "ERIC": {
+            "count": 5
+          },
+          "SemanticScholar": {
+            "count": 5
+          },
+          "Scholar": {
+            "count": 5
+          }
+        }
+      }
+    },
+    {
+      "name": "LICO Workflow",
+      "status": "PASS",
+      "response_code": 200,
+      "run_id": "e91054ba-0b0c-4274-8134-7400acc3f2cb",
+      "data": {
+        "thread_id": "813256c2-0b53-4d42-8b8e-cc29f0702b31",
+        "run_id": "e91054ba-0b0c-4274-8134-7400acc3f2cb",
+        "prisma": {
+          "identified": 75,
+          "deduped": 50,
+          "screened": 50,
+          "excluded": 6,
+          "eligible": 44,
+          "included": 1
+        },
+        "n_appraised": 1,
+        "ratings": [
+          "Amber"
+        ]
+      }
+    },
+    {
+      "name": "Simple Query Workflow",
+      "status": "FAIL",
+      "response_code": 422,
+      "data": null
+    },
+    {
+      "name": "Export Functionality",
+      "status": "FAIL",
+      "json_export": "FAIL",
+      "csv_export": "FAIL",
+      "json_size": 0,
+      "csv_size": 0
+    }
+  ],
+  "summary": {
+    "total_tests": 5,
+    "passed": 3,
+    "failed": 2,
+    "success_rate": "60.0%"
+  }
+}

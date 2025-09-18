@@ -1,0 +1,10 @@
+// Optimized component exports with performance patterns
+export { PressPlanner } from './PressPlanner'
+export { RunHistory } from './RunHistory'
+export { RunResults } from './RunResults'
+export { ResearchInput } from './ResearchInput'
+export { AiAssistant } from './AiAssistant'
+export { StrategyDisplay } from './StrategyDisplay'
+export { LicoForm } from './LicoForm'
+export { LicoMode } from './LicoMode'
+export { QuestionMode } from './QuestionMode'

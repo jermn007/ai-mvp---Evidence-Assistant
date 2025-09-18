@@ -1,0 +1,425 @@
+{
+  "timestamp": "2025-09-18 08:24:51",
+  "environment": "local",
+  "base_url": "http://localhost:8000",
+  "test_categories": {
+    "health": [
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "response_time_ms": 262.457,
+        "data": {
+          "ok": true,
+          "env": true
+        },
+        "checks": {
+          "status_ok": true,
+          "response_ok": true,
+          "env_configured": true
+        },
+        "test_name": "Basic Health Check",
+        "timestamp": "08:24:51"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "checkpointer_type": "memory",
+        "data": {
+          "checkpointer": "memory"
+        },
+        "test_name": "Checkpointer Status",
+        "timestamp": "08:24:51"
+      }
+    ],
+    "sources": [
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "sources_tested": 6,
+        "sources_available": 6,
+        "source_details": {
+          "PubMed": {
+            "available": true,
+            "count": 3,
+            "error": null
+          },
+          "Crossref": {
+            "available": true,
+            "count": 3,
+            "error": null
+          },
+          "arXiv": {
+            "available": true,
+            "count": 3,
+            "error": null
+          },
+          "ERIC": {
+            "available": true,
+            "count": 3,
+            "error": null
+          },
+          "SemanticScholar": {
+            "available": true,
+            "count": 3,
+            "error": null
+          },
+          "Scholar": {
+            "available": true,
+            "count": 3,
+            "error": null
+          }
+        },
+        "data": {
+          "query": "active learning in higher education",
+          "max_n": 3,
+          "year_min": 2019,
+          "sources": {
+            "PubMed": {
+              "count": 3
+            },
+            "Crossref": {
+              "count": 3
+            },
+            "arXiv": {
+              "count": 3
+            },
+            "ERIC": {
+              "count": 3
+            },
+            "SemanticScholar": {
+              "count": 3
+            },
+            "Scholar": {
+              "count": 3
+            }
+          }
+        },
+        "test_name": "Academic Database Connectivity",
+        "timestamp": "08:24:59"
+      }
+    ],
+    "press": [
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "plan_structure_valid": true,
+        "has_strategies": true,
+        "strategy_count": 1,
+        "data": {
+          "question_lico": {
+            "learner": "medical students",
+            "intervention": "simulation-based learning",
+            "context": "clinical skills training",
+            "outcome": "competency assessment scores"
+          },
+          "strategies": {
+            "MEDLINE": {
+              "database": "MEDLINE",
+              "interface": "PubMed",
+              "lines": [
+                {
+                  "n": 1,
+                  "type": "Learner",
+                  "text": "(\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh] OR \"medical student*\"[tiab] OR \"nursing student*\"[tiab] OR \"allied health student*\"[tiab] OR resident*[tiab] OR trainee*[tiab] OR \"medical students\"[tiab])",
+                  "hits": null
+                },
+                {
+                  "n": 2,
+                  "type": "Intervention",
+                  "text": "(\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh] OR \"interprofessional education\"[tiab] OR simulation-based*[tiab] OR \"active learning\"[tiab] OR \"team-based learning\"[tiab] OR \"problem-based learning\"[tiab] OR \"simulation-based learning\"[tiab])",
+                  "hits": null
+                },
+                {
+                  "n": 3,
+                  "type": "Context",
+                  "text": "(\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh] OR universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR \"clinical placement\"[tiab] OR classroom*[tiab] OR \"clinical skills training\"[tiab])",
+                  "hits": null
+                },
+                {
+                  "n": 4,
+                  "type": "Outcome",
+                  "text": "(\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh] OR attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR \"patient outcome*\"[tiab] OR \"competency assessment scores\"[tiab])",
+                  "hits": null
+                },
+                {
+                  "n": 5,
+                  "type": "Combine",
+                  "text": "1 AND 2 AND 3 AND 4",
+                  "hits": null
+                },
+                {
+                  "n": 6,
+                  "type": "Limits",
+                  "text": "2015:3000[dp] AND English[la] AND Humans[Mesh]",
+                  "hits": null
+                }
+              ]
+            }
+          },
+          "checklist": {
+            "MEDLINE": {
+              "translation": "pass",
+              "subject_headings": "pass",
+              "text_words": "pass",
+              "spelling_syntax_lines": "pass",
+              "limits_filters": "pass",
+              "notes": "Auto-checks are heuristic; librarian review recommended."
+            }
+          }
+        },
+        "test_name": "PRESS Plan Generation",
+        "timestamp": "08:24:59"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "has_pubmed_query": true,
+        "has_generic_query": true,
+        "data": {
+          "query_pubmed": "(((\"Students, Health Occupations\"[Mesh] OR \"Education, Medical\"[Mesh] OR \"Education, Nursing\"[Mesh] OR \"medical student*\"[tiab] OR \"nursing student*\"[tiab] OR \"allied health student*\"[tiab] OR resident*[tiab] OR trainee*[tiab] OR \"medical students\"[tiab])) AND ((\"Education, Interprofessional\"[Mesh] OR \"Education, Professional\"[Mesh] OR \"Teaching\"[Mesh] OR \"interprofessional education\"[tiab] OR simulation-based*[tiab] OR \"active learning\"[tiab] OR \"team-based learning\"[tiab] OR \"problem-based learning\"[tiab] OR \"simulation-based learning\"[tiab])) AND ((\"Schools, Medical\"[Mesh] OR \"Schools, Nursing\"[Mesh] OR \"Clinical Clerkship\"[Mesh] OR universit*[tiab] OR college*[tiab] OR prelicen*[tiab] OR \"clinical placement\"[tiab] OR classroom*[tiab] OR \"clinical skills training\"[tiab])) AND ((\"Education Measurement\"[Mesh] OR \"Clinical Competence\"[Mesh] OR attitude*[tiab] OR knowledge*[tiab] OR skill*[tiab] OR behavior*[tiab] OR \"patient outcome*\"[tiab] OR \"competency assessment scores\"[tiab]))) AND (2015:3000[dp] AND English[la] AND Humans[Mesh])",
+          "query_generic": "(((\"Students, Health Occupations\" OR \"Education, Medical\" OR \"Education, Nursing\" OR \"medical student*\" OR \"nursing student*\" OR \"allied health student*\" OR resident* OR trainee* OR \"medical students\")) AND ((\"Education, Interprofessional\" OR \"Education, Professional\" OR \"Teaching\" OR \"interprofessional education\" OR simulation-based* OR \"active learning\" OR \"team-based learning\" OR \"problem-based learning\" OR \"simulation-based learning\")) AND ((\"Schools, Medical\" OR \"Schools, Nursing\" OR \"Clinical Clerkship\" OR universit* OR college* OR prelicen* OR \"clinical placement\" OR classroom* OR \"clinical skills training\")) AND ((\"Education Measurement\" OR \"Clinical Competence\" OR attitude* OR knowledge* OR skill* OR behavior* OR \"patient outcome*\" OR \"competency assessment scores\"))) AND (2015:3000 AND English AND Humans)",
+          "years": "2015-"
+        },
+        "test_name": "Query Extraction from Plan",
+        "timestamp": "08:24:59"
+      }
+    ],
+    "ai": [
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "ai_available": true,
+        "features_count": 6,
+        "data": {
+          "available": true,
+          "model": "gpt-4",
+          "features": [
+            "LICO enhancement",
+            "PRESS strategy analysis",
+            "Study relevance assessment",
+            "Quality rationale generation",
+            "Smart template selection",
+            "Research synthesis with full-text retrieval"
+          ]
+        },
+        "test_name": "AI Service Status",
+        "timestamp": "08:24:59"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "data": null,
+        "test_name": "LICO Enhancement",
+        "timestamp": "08:25:20"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "has_question": true,
+        "data": {
+          "question": "\"What is the impact of virtual reality interventions on learning retention among medical students in the context of anatomy education?\""
+        },
+        "test_name": "Research Question Generation",
+        "timestamp": "08:25:22"
+      }
+    ],
+    "workflow": [
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "run_id": "f9872500-14ec-4643-b72e-d77e205208c3",
+        "has_prisma": true,
+        "n_appraised": 1,
+        "data": {
+          "thread_id": "2f729d62-f077-4a5b-b2aa-aac7b2bb6aa5",
+          "run_id": "f9872500-14ec-4643-b72e-d77e205208c3",
+          "prisma": {
+            "identified": 41,
+            "deduped": 11,
+            "screened": 11,
+            "excluded": 1,
+            "eligible": 10,
+            "included": 1
+          },
+          "n_appraised": 1,
+          "ratings": [
+            "Amber"
+          ]
+        },
+        "test_name": "Basic Workflow Execution",
+        "timestamp": "08:25:25"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "has_run_info": true,
+        "n_records": 11,
+        "n_appraisals": 1,
+        "data": {
+          "run": {
+            "id": "f9872500-14ec-4643-b72e-d77e205208c3",
+            "query": "healthcare professionals educational technology continuing education knowledge retention",
+            "created_at": "2025-09-18T12:25:25.689982"
+          },
+          "counts": {
+            "identified": 41,
+            "deduped": 11,
+            "screened": 11,
+            "excluded": 1,
+            "eligible": 10,
+            "included": 1
+          },
+          "exclude_reasons": {
+            "Not primary research": 1
+          },
+          "n_records": 11,
+          "n_appraisals": 1,
+          "label_counts": {
+            "Amber": 1
+          },
+          "source_counts_kept": {
+            "ERIC": 9,
+            "PubMed": 1,
+            "Unknown": 1
+          },
+          "timings": {}
+        },
+        "test_name": "Run Summary Retrieval",
+        "timestamp": "08:25:27"
+      }
+    ],
+    "export": [
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "content_size_bytes": 17263,
+        "valid_format": true,
+        "endpoint": "records.json",
+        "test_name": "Records JSON Export",
+        "timestamp": "08:25:27"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "content_size_bytes": 16308,
+        "valid_format": true,
+        "endpoint": "records.csv",
+        "test_name": "Records CSV Export",
+        "timestamp": "08:25:27"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "content_size_bytes": 440,
+        "valid_format": true,
+        "endpoint": "appraisals.json",
+        "test_name": "Appraisals JSON Export",
+        "timestamp": "08:25:27"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "content_size_bytes": 409,
+        "valid_format": true,
+        "endpoint": "appraisals.csv",
+        "test_name": "Appraisals CSV Export",
+        "timestamp": "08:25:27"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "content_size_bytes": 2026,
+        "valid_format": true,
+        "endpoint": "records_with_appraisals.json",
+        "test_name": "Combined Records+Appraisals JSON",
+        "timestamp": "08:25:27"
+      },
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "content_size_bytes": 188,
+        "valid_format": true,
+        "endpoint": "prisma.summary.json",
+        "test_name": "PRISMA Summary JSON",
+        "timestamp": "08:25:27"
+      }
+    ],
+    "management": [
+      {
+        "status": "PASS",
+        "response_code": 200,
+        "total_runs": 24,
+        "items_returned": 5,
+        "has_pagination": true,
+        "data": {
+          "total": 24,
+          "limit": 5,
+          "offset": 0,
+          "items": [
+            {
+              "id": "f9872500-14ec-4643-b72e-d77e205208c3",
+              "query": "healthcare professionals educational technology continuing education knowledge retention",
+              "created_at": "2025-09-18T12:25:25.689982",
+              "n_records": 11,
+              "n_appraisals": 1,
+              "label_counts": {
+                "Amber": 1
+              }
+            },
+            {
+              "id": "65c3623a-174f-427e-8264-00ba62eb116b",
+              "query": "(((\"Students, Health Occupations\" OR \"Education, Medical\" OR \"Education, Nursing\" OR \"medical student*\" OR \"nursing student*\" OR \"allied health student*\" OR resident* OR trainee* OR \"university students\")) AND ((\"Education, Interprofessional\" OR \"Education, Professional\" OR \"Teaching\" OR \"interprofessional education\" OR simulation-based* OR \"active learning\" OR \"team-based learning\" OR \"problem-based learning\" OR \"instructional design\")) AND ((\"Schools, Medical\" OR \"Schools, Nursing\" OR \"Clinical Clerkship\" OR universit* OR college* OR prelicen* OR \"clinical placement\" OR classroom* OR \"online learning environment\")) AND ((\"Education Measurement\" OR \"Clinical Competence\" OR attitude* OR knowledge* OR skill* OR behavior* OR \"patient outcome*\" OR \"learning effectiveness\"))) AND (2015:3000 AND English AND Humans)",
+              "created_at": "2025-09-18T11:57:10.533865",
+              "n_records": 26,
+              "n_appraisals": 1,
+              "label_counts": {
+                "Red": 1
+              }
+            },
+            {
+              "id": "e91054ba-0b0c-4274-8134-7400acc3f2cb",
+              "query": "university students instructional design online learning environment learning effectiveness",
+              "created_at": "2025-09-17T22:38:27.080458",
+              "n_records": 50,
+              "n_appraisals": 1,
+              "label_counts": {
+                "Amber": 1
+              }
+            },
+            {
+              "id": "37381f3a-d187-4501-9b5e-ccf623493365",
+              "query": "instructional design",
+              "created_at": "2025-09-17T22:36:12.459916",
+              "n_records": 87,
+              "n_appraisals": 1,
+              "label_counts": {
+                "Red": 1
+              }
+            },
+            {
+              "id": "4579a122-6a9c-426a-9999-9c83292b4b69",
+              "query": "instructional design",
+              "created_at": "2025-09-17T22:33:23.753557",
+              "n_records": 87,
+              "n_appraisals": 1,
+              "label_counts": {
+                "Red": 1
+              }
+            }
+          ]
+        },
+        "test_name": "Runs Listing",
+        "timestamp": "08:25:27"
+      }
+    ]
+  },
+  "summary": {
+    "total_tests": 17,
+    "passed": 17,
+    "failed": 0,
+    "errors": 0,
+    "success_rate": "100.0%",
+    "categories_tested": 7,
+    "test_duration_seconds": 36.82091474533081
+  }
+}

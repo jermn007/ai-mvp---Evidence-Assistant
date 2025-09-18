@@ -142,7 +142,66 @@ logger = logging.getLogger(__name__)
 if not logger.handlers:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
-app = FastAPI(title="Evidence Assistant (MVP)")
+app = FastAPI(
+    title="Evidence Assistant (AI-Powered Literature Review)",
+    summary="Automate systematic literature reviews with 5-step PRESS workflow",
+    description="""# Evidence Assistant API
+
+A comprehensive AI-powered research automation platform for systematic literature reviews.
+
+## Features
+- **PRESS Planning**: Structured search strategy development with LICO framework
+- **Multi-Database Harvesting**: Search 6 academic databases simultaneously
+- **Intelligent Deduplication**: 96% threshold fuzzy matching with screening
+- **AI Quality Appraisal**: Rubric-based scoring with 8 weighted criteria
+- **PRISMA Reporting**: Automated flow statistics and export capabilities
+
+## Workflow
+1. **Plan** → Generate PRESS search strategy from research question
+2. **Harvest** → Search PubMed, Crossref, arXiv, ERIC, Semantic Scholar, Google Scholar
+3. **Dedupe & Screen** → Remove duplicates and apply inclusion/exclusion criteria
+4. **Appraise** → Quality assessment with Red/Amber/Green ratings
+5. **Report** → Generate PRISMA flow diagrams and export results
+
+## Research Domains
+Supports clinical, education, and general research with domain-specific templates.
+""",
+    version="1.0.0",
+    contact={
+        "name": "Evidence Assistant Team",
+        "email": "support@evidence-assistant.ai"
+    },
+    license_info={
+        "name": "MIT",
+        "identifier": "MIT"
+    },
+    openapi_tags=[
+        {
+            "name": "health",
+            "description": "System health and status monitoring endpoints"
+        },
+        {
+            "name": "workflows",
+            "description": "Core literature review workflow execution. Execute complete 5-step research pipelines."
+        },
+        {
+            "name": "press",
+            "description": "PRESS (Peer Review of Electronic Search Strategies) planning and query generation. Create structured search strategies using LICO framework."
+        },
+        {
+            "name": "sources",
+            "description": "Academic database connectivity and testing. Verify connections to PubMed, Crossref, arXiv, ERIC, Semantic Scholar, and Google Scholar."
+        },
+        {
+            "name": "export",
+            "description": "Data export and reporting. Download results in JSON, CSV formats with PRISMA statistics."
+        },
+        {
+            "name": "ai",
+            "description": "AI-powered research assistance. Enhanced LICO analysis, strategy optimization, and study relevance assessment."
+        }
+    ]
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -169,20 +228,57 @@ GRAPH = get_graph()
 
 
 class RunRequest(BaseModel):
+    """Request model for executing a complete literature review workflow."""
     query: str | None = None
     lico: LICO | None = None
     years: str | None = None                 # e.g., "2019-"
     sources: List[str] | None = None         # e.g., ["PubMed","ERIC",...]
     thread_id: str | None = None
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "query": "active learning strategies in medical education",
+                    "years": "2019-",
+                    "sources": ["PubMed", "ERIC", "Crossref"]
+                },
+                {
+                    "lico": {
+                        "learner": "medical students",
+                        "intervention": "simulation-based learning",
+                        "context": "clinical skills training",
+                        "outcome": "competency assessment scores"
+                    },
+                    "years": "2020-",
+                    "sources": ["PubMed", "ERIC", "SemanticScholar"]
+                }
+            ]
+        }
+    }
 
-@app.get("/health")
+
+@app.get(
+    "/health",
+    tags=["health"],
+    summary="Check system health",
+    description="Verify system status and environment configuration",
+    response_description="System health status with environment checks"
+)
 def health():
+    """Health check endpoint for monitoring system status and configuration."""
     return {"ok": True, "env": bool(os.getenv("OPENAI_API_KEY"))}
 
 
-@app.get("/health/checkpointer")
+@app.get(
+    "/health/checkpointer",
+    tags=["health"],
+    summary="Check workflow persistence status",
+    description="Verify LangGraph checkpointer configuration for workflow state persistence",
+    response_description="Checkpointer type and status information"
+)
 def health_checkpointer():
+    """Check the type and status of the workflow state persistence system."""
     try:
         from langgraph.checkpoint.memory import MemorySaver
         kind = "memory" if isinstance(CHECKPOINTER, MemorySaver) else "postgres"
@@ -191,7 +287,13 @@ def health_checkpointer():
     return {"checkpointer": kind}
 
 
-@app.post("/run")
+@app.post(
+    "/run",
+    tags=["workflows"],
+    summary="Execute complete literature review workflow",
+    description="Run the full 5-step systematic literature review process: PRESS planning → harvesting → deduplication/screening → appraisal → PRISMA reporting",
+    response_description="Workflow execution results with PRISMA statistics and quality ratings"
+)
 async def run(req: RunRequest):
     try:
         tid = req.thread_id or str(uuid4())
@@ -235,9 +337,39 @@ async def run(req: RunRequest):
 # ======================= Run from PRESS plan =======================
 
 class RunWithPressBody(BaseModel):
+    """Request model for executing workflow with a pre-generated PRESS plan."""
     plan: PressPlanResponse
     sources: Optional[List[str]] = None
     thread_id: Optional[str] = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "sources": ["PubMed", "Crossref", "ERIC", "SemanticScholar"],
+                    "plan": {
+                        "question_lico": {
+                            "learner": "healthcare students",
+                            "intervention": "virtual reality training",
+                            "context": "surgical skills education",
+                            "outcome": "technical skill acquisition"
+                        },
+                        "strategies": {
+                            "MEDLINE": {
+                                "database": "MEDLINE",
+                                "interface": "PubMed",
+                                "lines": [
+                                    {"n": 1, "type": "Learner", "text": "(healthcare students[tiab] OR medical students[tiab])", "hits": None},
+                                    {"n": 2, "type": "Intervention", "text": "(virtual reality[tiab] OR VR training[tiab])", "hits": None},
+                                    {"n": 3, "type": "Combine", "text": "1 AND 2", "hits": None}
+                                ]
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+    }
 
 def _pubmed_query_from_strategy(strat: PressStrategy | dict) -> tuple[str, Optional[str]]:
     """Return (final_query, years_from_limits_or_none) from a MEDLINE/PubMed strategy.
@@ -294,7 +426,13 @@ def _genericize_query(pubmed_q: str | None) -> str:
     q = re.sub(r"\(\s*\)", "", q)
     return q.strip()
 
-@app.post("/run/press")
+@app.post(
+    "/run/press",
+    tags=["workflows"],
+    summary="Execute workflow with PRESS plan",
+    description="Run literature review workflow using a pre-generated PRESS search strategy with optimized database queries",
+    response_description="Workflow results with query details and execution metrics"
+)
 async def run_with_press(body: RunWithPressBody):
     try:
         logger.info(f"run_with_press: endpoint called with thread_id={getattr(body, 'thread_id', None)}")
@@ -383,7 +521,13 @@ async def run_with_press(body: RunWithPressBody):
 class PlanQueriesBody(BaseModel):
     plan: PressPlanResponse
 
-@app.post("/press/plan/queries")
+@app.post(
+    "/press/plan/queries",
+    tags=["press"],
+    summary="Extract queries from PRESS plan",
+    description="Convert a PRESS search strategy into executable database queries (PubMed-specific and generic formats)",
+    response_description="Generated queries ready for database execution"
+)
 def plan_queries(body: PlanQueriesBody):
     try:
         plan = body.plan
@@ -399,7 +543,13 @@ def plan_queries(body: PlanQueriesBody):
         raise HTTPException(status_code=500, detail=f"plan_queries failed: {type(e).__name__}: {e}")
 
 
-@app.get("/sources/test")
+@app.get(
+    "/sources/test",
+    tags=["sources"],
+    summary="Test academic database connections",
+    description="Verify connectivity and search functionality across all 6 supported academic databases with a test query",
+    response_description="Connection status and result counts for each database"
+)
 async def sources_test(q: str = "active learning in higher education", max_n: int = 5):
     year_min = 2019
     try:
@@ -479,14 +629,26 @@ def _label_rank_expr(col, order: list[str]):
 
 from sqlalchemy import select as SAselect
 
-@app.get("/runs/{run_id}/records.json")
+@app.get(
+    "/runs/{run_id}/records.json",
+    tags=["export"],
+    summary="Export records as JSON",
+    description="Download all research records from a literature review run in JSON format",
+    response_description="Array of research records with metadata"
+)
 async def export_records_json(run_id: str):
     stmt = SAselect(Record).where(Record.run_id == run_id)
     rows = await _select_stmt(stmt)
     cols = _pick_columns(rows, COLS_RECORD)
     return _rows_to_json(rows, cols)
 
-@app.get("/runs/{run_id}/records.csv")
+@app.get(
+    "/runs/{run_id}/records.csv",
+    tags=["export"],
+    summary="Export records as CSV",
+    description="Download all research records from a literature review run in CSV format for spreadsheet analysis",
+    response_description="CSV file with research records"
+)
 async def export_records_csv(run_id: str):
     stmt = SAselect(Record).where(Record.run_id == run_id)
     rows = await _select_stmt(stmt)
@@ -494,7 +656,13 @@ async def export_records_csv(run_id: str):
     csv_body = _rows_to_csv(rows, cols)
     return Response(content=csv_body, media_type="text/csv")
 
-@app.get("/runs/{run_id}/appraisals.json")
+@app.get(
+    "/runs/{run_id}/appraisals.json",
+    tags=["export"],
+    summary="Export quality appraisals as JSON",
+    description="Download all quality assessment results including Red/Amber/Green ratings, scores, and rationales",
+    response_description="Array of quality appraisals with detailed scoring"
+)
 async def export_appraisals_json(run_id: str):
     stmt = SAselect(Appraisal).where(Appraisal.run_id == run_id)
     rows = await _select_stmt(stmt)
@@ -516,7 +684,13 @@ JOIN_COLS = [
     "publication_type", "rating", "score_final", "rationale", "run_id"
 ]
 
-@app.get("/runs/{run_id}/records_with_appraisals.json")
+@app.get(
+    "/runs/{run_id}/records_with_appraisals.json",
+    tags=["export"],
+    summary="Export joined records with quality ratings",
+    description="Download research records combined with their quality appraisal results in a single JSON structure",
+    response_description="Joined dataset of records and their quality assessments"
+)
 async def export_records_with_appraisals_json(run_id: str):
     stmt = SAselect(
         Record.id.label("record_id"),
@@ -567,7 +741,13 @@ async def export_records_with_appraisals_csv(run_id: str):
 
 # ======================= PRISMA summary ======================================
 
-@app.get("/runs/{run_id}/prisma.summary.json")
+@app.get(
+    "/runs/{run_id}/prisma.summary.json",
+    tags=["export"],
+    summary="Get PRISMA flow statistics",
+    description="Retrieve PRISMA flow diagram data including identification, deduplication, screening, and inclusion counts with exclusion reasons",
+    response_description="PRISMA statistics and exclusion reason breakdown"
+)
 async def prisma_summary_json(run_id: str):
     # Counts
     counts = None
@@ -871,10 +1051,16 @@ def _dt_iso(dt_obj):
     except Exception:
         return str(dt_obj)
 
-@app.get("/runs.page.json")
+@app.get(
+    "/runs.page.json",
+    tags=["export"],
+    summary="List literature review runs",
+    description="Get paginated list of all literature review workflow executions with summary statistics",
+    response_description="Paginated list of runs with record counts and quality distribution"
+)
 async def runs_page(
-    limit: int = Query(20, ge=1, le=200),
-    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=200, description="Number of runs to return per page"),
+    offset: int = Query(0, ge=0, description="Number of runs to skip for pagination"),
 ):
     # Fetch page of runs
     runs_stmt = (
@@ -944,7 +1130,13 @@ async def runs_page(
 
 # ======================= Run summary =========================================
 
-@app.get("/runs/{run_id}/summary.json")
+@app.get(
+    "/runs/{run_id}/summary.json",
+    tags=["export"],
+    summary="Get comprehensive run summary",
+    description="Retrieve detailed statistics and analytics for a literature review run including PRISMA counts, quality distribution, and source breakdown",
+    response_description="Complete run analytics with counts, ratings, and source statistics"
+)
 async def run_summary(run_id: str):
     # Basic run info
     run_info = None
@@ -1352,6 +1544,7 @@ def _strategy_ns_to_dict(ns: _NS) -> dict:
 # ----------------------- PRESS planner endpoints ------------------------------
 
 class PressPlanBody(BaseModel):
+    """Request model for generating PRESS search strategies."""
     lico: LICO
     databases: Optional[List[DatabaseSpec]] = None
     template: Optional[str] = None
@@ -1359,13 +1552,57 @@ class PressPlanBody(BaseModel):
     enable_ai: Optional[bool] = False
     research_domain: Optional[str] = None
 
-@app.post("/press/plan", response_model=PressPlanResponse)
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "lico": {
+                        "learner": "nursing students",
+                        "intervention": "problem-based learning",
+                        "context": "undergraduate nursing education",
+                        "outcome": "critical thinking skills"
+                    },
+                    "template": "education",
+                    "use_stock": True,
+                    "enable_ai": True,
+                    "research_domain": "healthcare education"
+                },
+                {
+                    "lico": {
+                        "learner": "patients with diabetes",
+                        "intervention": "mobile health applications",
+                        "context": "self-management",
+                        "outcome": "glycemic control"
+                    },
+                    "template": "clinical",
+                    "use_stock": True,
+                    "enable_ai": False
+                }
+            ]
+        }
+    }
+
+@app.post(
+    "/press/plan",
+    response_model=PressPlanResponse,
+    tags=["press"],
+    summary="Generate PRESS search strategy",
+    description="Create a structured PRESS (Peer Review of Electronic Search Strategies) plan from LICO components with domain-specific templates and validation checklist",
+    response_description="Complete PRESS strategy with numbered search lines and quality checklist"
+)
 async def make_press_plan(body: PressPlanBody):
     """Return a PRESS-compatible, LICO-driven strategy (numbered boolean lines + self-check)."""
     return plan_press_from_lico(body.lico, body.databases, template=body.template, use_stock=bool(body.use_stock))
 
 
-@app.post("/press/plan/ai-enhanced", response_model=dict)
+@app.post(
+    "/press/plan/ai-enhanced",
+    response_model=dict,
+    tags=["press", "ai"],
+    summary="Generate AI-enhanced PRESS strategy",
+    description="Create an intelligent PRESS plan with AI-powered LICO term suggestions, strategy analysis, and optimization recommendations",
+    response_description="Enhanced PRESS plan with AI insights and improvement suggestions"
+)
 async def make_ai_enhanced_press_plan(body: PressPlanBody):
     """
     Return an AI-enhanced PRESS plan with intelligent suggestions and analysis.
@@ -1514,7 +1751,14 @@ class StudyRelevanceRequest(BaseModel):
     research_question: Optional[str] = None
 
 
-@app.post("/ai/enhance-lico", response_model=Optional[LICOEnhancement])
+@app.post(
+    "/ai/enhance-lico",
+    response_model=Optional[LICOEnhancement],
+    tags=["ai"],
+    summary="AI-powered LICO term enhancement",
+    description="Get intelligent suggestions to expand and improve LICO (Learner, Intervention, Context, Outcome) terms for comprehensive literature search coverage",
+    response_description="Enhanced LICO terms with synonyms, MeSH headings, and related concepts"
+)
 async def ai_enhance_lico(request: LICOEnhancementRequest):
     """
     Get AI-powered suggestions to enhance LICO terms for better search coverage.
@@ -1534,7 +1778,14 @@ async def ai_enhance_lico(request: LICOEnhancementRequest):
         raise HTTPException(status_code=500, detail=f"AI enhancement failed: {str(e)}")
 
 
-@app.post("/ai/analyze-strategy", response_model=Optional[PressStrategyAnalysis])
+@app.post(
+    "/ai/analyze-strategy",
+    response_model=Optional[PressStrategyAnalysis],
+    tags=["ai"],
+    summary="AI analysis of PRESS search strategy",
+    description="Get expert AI evaluation of search strategy completeness, balance, and effectiveness with specific improvement recommendations",
+    response_description="Detailed strategy analysis with quality scores and optimization suggestions"
+)
 async def ai_analyze_press_strategy(request: PressStrategyAnalysisRequest):
     """
     Get AI analysis of a PRESS search strategy with suggestions for improvement.
@@ -1553,7 +1804,14 @@ async def ai_analyze_press_strategy(request: PressStrategyAnalysisRequest):
         raise HTTPException(status_code=500, detail=f"AI analysis failed: {str(e)}")
 
 
-@app.post("/ai/assess-relevance", response_model=Optional[StudyRelevanceAssessment])
+@app.post(
+    "/ai/assess-relevance",
+    response_model=Optional[StudyRelevanceAssessment],
+    tags=["ai"],
+    summary="AI study relevance assessment",
+    description="Get intelligent evaluation of study relevance for systematic review inclusion with detailed reasoning and recommendations",
+    response_description="Relevance assessment with inclusion/exclusion recommendation and reasoning"
+)
 async def ai_assess_study_relevance(request: StudyRelevanceRequest):
     """
     Get AI assessment of study relevance for systematic review inclusion.
@@ -1662,7 +1920,14 @@ class ResearchSynthesisRequest(BaseModel):
     include_fulltext: bool = True
     max_studies: int = 50
 
-@app.post("/runs/{run_id}/synthesis", response_model=ResearchSynthesis)
+@app.post(
+    "/runs/{run_id}/synthesis",
+    response_model=ResearchSynthesis,
+    tags=["ai"],
+    summary="Generate AI research synthesis",
+    description="Create comprehensive evidence-based research synthesis with full-text analysis, LICO insights, and actionable recommendations",
+    response_description="Complete research synthesis with evidence analysis and recommendations"
+)
 def generate_research_synthesis(run_id: str, request: ResearchSynthesisRequest):
     """
     Generate comprehensive AI research synthesis for a literature review run.
@@ -1732,7 +1997,13 @@ def generate_research_synthesis(run_id: str, request: ResearchSynthesisRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to generate research synthesis: {str(e)}")
 
-@app.get("/ai/status")
+@app.get(
+    "/ai/status",
+    tags=["ai"],
+    summary="Check AI service status",
+    description="Verify AI service availability and list supported intelligent research assistance features",
+    response_description="AI service status and available features"
+)
 async def ai_status():
     """Check AI service availability and configuration."""
     ai_service = get_ai_service()

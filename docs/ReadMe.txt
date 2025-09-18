@@ -23,8 +23,8 @@ python -m app.run_local
 ### API Server
 python -m uvicorn app.server:app --reload
 
-### Streamlit Dashboard
-python -m streamlit run app/ui/dashboard.py --server.port 8501
+### React Frontend
+run frontend: `cd frontend/press-planner && npm i && npm run dev`
 
 ## API Usage Examples
 

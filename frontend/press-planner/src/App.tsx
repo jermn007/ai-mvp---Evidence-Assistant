@@ -1,13 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useMemo, memo } from 'react'
 import './App.css'
 import { PressPlanner } from './components/PressPlanner'
 import { RunHistory } from './components/RunHistory'
 import { RunResults } from './components/RunResults'
 import { ApiClient } from './services/apiClient'
 
+// Create singleton API client to avoid recreating on each render
 const apiClient = new ApiClient()
 
 type AppView = 'planner' | 'history' | 'results'
+
+// Memoized Loading Component
+const LoadingSpinner = memo(() => (
+  <div className="loading">
+    <div className="spinner"></div>
+    <p>Loading Evidence Assistant...</p>
+  </div>
+))
+LoadingSpinner.displayName = 'LoadingSpinner'
 
 function App() {
   const [aiAvailable, setAiAvailable] = useState<boolean>(false)
@@ -32,37 +42,39 @@ function App() {
     checkAiStatus()
   }, [])
 
+  // Memoize event handlers to prevent unnecessary re-renders
+  const handleSelectRun = useCallback((runId: string) => {
+    setSelectedRunId(runId)
+    setCurrentView('results')
+  }, [])
+
+  const handleNewRun = useCallback((runId: string, runData?: any) => {
+    setSelectedRunId(runId)
+    setCurrentView('results')
+  }, [])
+
+  const handleViewChange = useCallback((view: AppView) => {
+    setCurrentView(view)
+  }, [])
+
   if (loading) {
-    return (
-      <div className="loading">
-        <div className="spinner"></div>
-        <p>Loading Evidence Assistant...</p>
-      </div>
-    )
+    return <LoadingSpinner />
   }
 
-  const handleSelectRun = (runId: string) => {
-    setSelectedRunId(runId)
-    setCurrentView('results')
-  }
-
-  const handleNewRun = (runId: string, runData?: any) => {
-    setSelectedRunId(runId)
-    setCurrentView('results')
-  }
-
-  const renderCurrentView = () => {
+  // Memoize the current view to prevent unnecessary re-renders
+  const currentViewComponent = useMemo(() => {
     switch (currentView) {
       case 'history':
         return (
-          <RunHistory 
+          <RunHistory
             apiClient={apiClient}
             onSelectRun={handleSelectRun}
           />
         )
       case 'results':
         if (!selectedRunId) {
-          setCurrentView('planner')
+          // Reset to planner if no run selected
+          setTimeout(() => setCurrentView('planner'), 0)
           return null
         }
         return (
@@ -73,14 +85,14 @@ function App() {
         )
       default:
         return (
-          <PressPlanner 
-            apiClient={apiClient} 
+          <PressPlanner
+            apiClient={apiClient}
             aiAvailable={aiAvailable}
             onRunComplete={handleNewRun}
           />
         )
     }
-  }
+  }, [currentView, selectedRunId, aiAvailable, handleSelectRun, handleNewRun])
 
   return (
     <div className="app">
@@ -91,20 +103,20 @@ function App() {
             <p>AI-Powered Systematic Literature Review Platform</p>
           </div>
           <nav className="header-nav">
-            <button 
+            <button
               className={`nav-button ${currentView === 'planner' ? 'active' : ''}`}
-              onClick={() => setCurrentView('planner')}
+              onClick={() => handleViewChange('planner')}
             >
               New Review
             </button>
-            <button 
+            <button
               className={`nav-button ${currentView === 'history' ? 'active' : ''}`}
-              onClick={() => setCurrentView('history')}
+              onClick={() => handleViewChange('history')}
             >
               Review History
             </button>
             {currentView === 'results' && (
-              <button 
+              <button
                 className="nav-button active"
                 disabled
               >
@@ -116,7 +128,7 @@ function App() {
       </header>
       
       <main className="app-main">
-        {renderCurrentView()}
+        {currentViewComponent}
       </main>
       
       <footer className="app-footer">
