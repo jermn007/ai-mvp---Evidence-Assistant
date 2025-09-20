@@ -1,11 +1,20 @@
 from __future__ import annotations
 import os, uuid, asyncio
-import time, logging
+import time, logging, sys
 from typing import List, Dict
 
 logger = logging.getLogger("ai_mvp")
 if not logger.handlers:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+def safe_print(message):
+    """Print messages safely, handling Unicode characters that might not be encodable."""
+    try:
+        print(message)
+    except UnicodeEncodeError:
+        # Replace problematic characters and try again
+        safe_message = message.encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8')
+        print(safe_message)
 
 from rapidfuzz import fuzz
 from app.models import (
@@ -382,8 +391,42 @@ async def dedupe_screen(state):
     pc.excluded = sum(1 for s in screenings if s.decision == "exclude")
     pc.eligible = len(kept)
 
-    # Store all deduped records (before screening) for persistence 
+    # Store all deduped records (before screening) for persistence
+    safe_print(f"DEBUG dedupe_screen: About to store {len(deduped)} deduped records as original_records")
+    if deduped and len(deduped) > 0:
+        safe_print(f"DEBUG dedupe_screen: Sample deduped record[0]: id='{deduped[0].record_id}', title='{deduped[0].title[:50] if deduped[0].title else 'NO_TITLE'}...'")
+
+    # Enhanced debug logging for excluded records
+    excluded_records = []
+    included_records = []
+    for record in deduped:
+        # Find the screening decision for this record
+        screening_decision = None
+        for screening in screenings:
+            if screening.record_id == record.record_id:
+                screening_decision = screening.decision
+                break
+
+        if screening_decision == "exclude":
+            excluded_records.append(record)
+        elif screening_decision == "include":
+            included_records.append(record)
+
+    print(f"DEBUG dedupe_screen: Excluded records count: {len(excluded_records)}")
+    print(f"DEBUG dedupe_screen: Included records count: {len(included_records)}")
+
+    # Sample excluded records to see their metadata
+    for i, exc_record in enumerate(excluded_records[:3]):
+        title = exc_record.title[:50] if exc_record.title else 'NO_TITLE'
+        safe_print(f"DEBUG dedupe_screen: EXCLUDED record[{i}]: id='{exc_record.record_id}', title='{title}...', source='{getattr(exc_record, 'source', 'NO_SOURCE')}'")
+
+    # Sample included records to compare
+    for i, inc_record in enumerate(included_records[:3]):
+        title = inc_record.title[:50] if inc_record.title else 'NO_TITLE'
+        safe_print(f"DEBUG dedupe_screen: INCLUDED record[{i}]: id='{inc_record.record_id}', title='{title}...', source='{getattr(inc_record, 'source', 'NO_SOURCE')}'")
+
     state["original_records"] = deduped
+    print(f"DEBUG dedupe_screen: Stored {len(state.get('original_records', []))} records in state['original_records']")
     state["records"] = kept
     state["screenings"] = screenings
     state["prisma"] = pc
@@ -399,8 +442,9 @@ async def dedupe_screen(state):
 
 async def appraise(state):
     t0 = time.perf_counter()
-    
+
     try:
+        print(f"DEBUG appraise: Received state with {len(state.get('original_records', []))} original_records")
         logger.info(f"appraise: starting with {len(state.get('records', []))} records")
         global _RUBRIC
         if _RUBRIC is None:
@@ -415,31 +459,31 @@ async def appraise(state):
         for i, r in enumerate(state.get("records", [])):
             logger.info(f"appraise: processing record {i+1}: {getattr(r, 'title', 'Unknown title')[:50]}...")
             rating, scores = _RUBRIC.rate(r.year, r.title, r.abstract)
-        
-        # Generate AI rationale if enabled and available
-        rationale = "Quality assessment based on rubric criteria"
-        if use_ai_rationale and ai_service and ai_service.is_available():
-            try:
-                ai_rationale = await ai_service.generate_quality_rationale(
-                    title=r.title or "",
-                    abstract=r.abstract,
-                    year=r.year,
-                    rating=rating,
-                    scores=scores
-                )
-                if ai_rationale:
-                    rationale = ai_rationale
-            except Exception as e:
-                logger.warning(f"AI rationale generation failed for record {r.record_id}: {e}")
-                # Use default rationale
-        
-        apps.append(AppraisalModel(
-            record_id=r.record_id,
-            rating=rating,
-            rationale=rationale,
-            scores={k: float(v) for k, v in scores.items()},
-            citations=[r.url or ""],
-        ))
+
+            # Generate AI rationale if enabled and available
+            rationale = "Quality assessment based on rubric criteria"
+            if use_ai_rationale and ai_service and ai_service.is_available():
+                try:
+                    ai_rationale = await ai_service.generate_quality_rationale(
+                        title=r.title or "",
+                        abstract=r.abstract,
+                        year=r.year,
+                        rating=rating,
+                        scores=scores
+                    )
+                    if ai_rationale:
+                        rationale = ai_rationale
+                except Exception as e:
+                    logger.warning(f"AI rationale generation failed for record {r.record_id}: {e}")
+                    # Use default rationale
+
+            apps.append(AppraisalModel(
+                record_id=r.record_id,
+                rating=rating,
+                rationale=rationale,
+                scores={k: float(v) for k, v in scores.items()},
+                citations=[r.url or ""],
+            ))
 
         pc = state.get("prisma") or PrismaCountsModel()
         pc.included = len(apps)
@@ -450,6 +494,7 @@ async def appraise(state):
         state["timings"] = state.get("timings") or {}
         state["timings"]["appraise"] = round(time.perf_counter() - t0, 6)
         logger.info("appraise: n_appraised=%d", len(apps))
+        print(f"DEBUG appraise: Returning state with {len(state.get('original_records', []))} original_records")
         return state
     except Exception as e:
         import traceback
@@ -461,6 +506,8 @@ async def appraise(state):
 def report_prisma(state):
     t0 = time.perf_counter()
 
+    print(f"DEBUG report_prisma: Received state with {len(state.get('original_records', []))} original_records")
+
     # remember kept IDs for this thread
     kept_ids = [r.record_id for r in state.get("records", [])]
     seen = state.get("seen_external_ids") or []
@@ -468,4 +515,6 @@ def report_prisma(state):
 
     state["timings"] = state.get("timings") or {}
     state["timings"]["report_prisma"] = round(time.perf_counter() - t0, 6)
+
+    print(f"DEBUG report_prisma: Returning state with {len(state.get('original_records', []))} original_records")
     return state
