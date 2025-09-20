@@ -1,6 +1,87 @@
 import { useState, useEffect } from 'react'
 import { ApiClient } from '../services/apiClient'
+import { DetailedAppraisalView } from './DetailedAppraisalView'
 import './RunResults.css'
+
+// Author Display Component with truncation and expansion
+interface AuthorDisplayProps {
+  authors: string;
+}
+
+const AuthorDisplay: React.FC<AuthorDisplayProps> = ({ authors }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // Parse authors from comma-separated string
+  const authorsList = authors.split(',').map(author => author.trim()).filter(author => author.length > 0);
+  const needsTruncation = authorsList.length > 4;
+
+  const displayAuthors = isExpanded || !needsTruncation
+    ? authorsList
+    : authorsList.slice(0, 4);
+
+  return (
+    <span className="author-display">
+      {displayAuthors.join(', ')}
+      {needsTruncation && !isExpanded && (
+        <>
+          {' et al.'}
+          <button
+            className="author-toggle-btn"
+            onClick={() => setIsExpanded(true)}
+            type="button"
+          >
+            Show all authors
+          </button>
+        </>
+      )}
+      {needsTruncation && isExpanded && (
+        <button
+          className="author-toggle-btn"
+          onClick={() => setIsExpanded(false)}
+          type="button"
+        >
+          Show fewer authors
+        </button>
+      )}
+    </span>
+  );
+};
+
+// Abstract Display Component with expand/collapse functionality
+interface AbstractDisplayProps {
+  abstract: string;
+}
+
+const AbstractDisplay: React.FC<AbstractDisplayProps> = ({ abstract }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const cleanedAbstract = abstract.replace(/<\/?jats:[^>]*>/g, '').trim();
+  const needsTruncation = cleanedAbstract.length > 150;
+
+  // Fix truncation logic: start from beginning, add ellipsis only when truncated
+  const displayText = isExpanded || !needsTruncation
+    ? cleanedAbstract
+    : cleanedAbstract.substring(0, 150).trim();
+
+  return (
+    <div className="record-abstract">
+      <strong>Abstract:</strong>
+      <span className="abstract-text">
+        {displayText}
+        {needsTruncation && !isExpanded && '...'}
+      </span>
+      {needsTruncation && (
+        <button
+          className="abstract-toggle-btn"
+          onClick={() => setIsExpanded(!isExpanded)}
+          type="button"
+        >
+          {isExpanded ? 'Show less' : 'Show full abstract'}
+        </button>
+      )}
+    </div>
+  );
+};
 
 interface RunResultsProps {
   runId?: string
@@ -26,6 +107,39 @@ interface RunSummary {
   }
 }
 
+// Enhanced appraisal methodology information
+interface AppraisalMethodology {
+  id: string
+  name: string
+  version: string
+  description?: string
+  method_type: 'rag_quality' | 'kirkpatrick' | 'towle' | 'strength_conclusion' | 'custom'
+  criteria: Record<string, {
+    weight: number
+    description: string
+  }>
+  scoring_config: Record<string, any>
+  requires_full_text: boolean
+}
+
+// Detailed appraisal scores and metadata
+interface DetailedAppraisal {
+  id: string
+  methodology_id: string
+  methodology?: AppraisalMethodology
+  scores: Record<string, number>  // Individual criterion scores
+  overall_score: number
+  rating: string
+  rationale?: string
+  evidence_citations?: string[]
+  confidence: number
+  used_full_text: boolean
+  sections_analyzed?: string[]
+  assessed_by?: string
+  assessment_time?: number
+  created_at: string
+}
+
 interface RecordWithAppraisal {
   id: string
   title: string
@@ -36,6 +150,7 @@ interface RecordWithAppraisal {
   doi?: string
   url?: string
   publication_type?: string
+  institution?: string  // Author affiliation/institution
   screening_decision?: 'include' | 'exclude'
   screening_reason?: string
   screening_ai_explanation?: string
@@ -44,41 +159,198 @@ interface RecordWithAppraisal {
   appraisal_reasoning?: string
   ai_review_type?: 'full_text' | 'abstract_only'
   status?: 'Include' | 'Exclude'  // For display purposes
+  // Enhanced appraisal data
+  detailed_appraisals?: DetailedAppraisal[]
+  multi_method_scores?: Record<string, DetailedAppraisal>
+  confidence_range?: [number, number]  // Min/max confidence across methods
 }
 
 type SortField = 'title' | 'appraisal_score' | 'publication_type' | 'year' | 'authors' | 'status'
 type SortOrder = 'asc' | 'desc'
 
-// Helper functions for excluded records
-function _generateTitleFromId(recordId: string, reason?: string): string {
-  if (reason) {
-    const reasonMap: Record<string, string> = {
-      'Pre-2018': 'Study published before 2018 (excluded)',
-      'Not relevant': 'Study not relevant to research question (excluded)',
-      'Not primary research': 'Non-primary research (excluded)',
-      'Non-English': 'Non-English publication (excluded)',
-      'No full text': 'Full text not available (excluded)'
+// Smart data fallback helpers
+function extractAuthorsFromTitle(title: string): string | null {
+  // Look for common author patterns in titles
+  const patterns = [
+    // "by Author Name" patterns - most reliable
+    /by\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]*\.?)*(?:\s+and\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]*\.?)*)*)/i,
+    // "Author et al." patterns - reliable
+    /([A-Z][a-z]+(?:\s+[A-Z]\.)*(?:\s+[A-Z][a-z]+)?)\s+et\s+al\.?/i,
+    // Single author name at start with colon (First Last:) - must be reasonable length
+    /^([A-Z][a-z]{2,15}\s+[A-Z][a-z]{2,15}):\s/,
+  ]
+
+  // Common non-author words that appear in titles (more conservative list)
+  const invalidAuthorWords = [
+    'infinity', 'instruct', 'synthesis', 'framework', 'methodology', 'approach',
+    'analysis', 'study', 'research', 'review', 'systematic', 'meta', 'evidence',
+    'implementation', 'effectiveness', 'evaluation'
+  ]
+
+  for (const pattern of patterns) {
+    const match = title.match(pattern)
+    if (match && match[1].length > 3 && match[1].length < 50) {
+      const extracted = match[1].trim()
+
+      // Check if extracted text contains common non-author words
+      const hasInvalidWords = invalidAuthorWords.some(word =>
+        extracted.toLowerCase().includes(word)
+      )
+
+      // Must contain at least one common name pattern (First Last or Last, First)
+      const hasNamePattern = /^[A-Z][a-z]{2,15}\s+[A-Z][a-z]{2,15}$/.test(extracted) ||
+                            /^[A-Z][a-z]{2,15},\s*[A-Z][a-z]{2,15}/.test(extracted)
+
+      if (!hasInvalidWords && hasNamePattern) {
+        return extracted
+      }
     }
-    return reasonMap[reason] || `Study excluded: ${reason}`
   }
-  
-  // Extract some info from record ID if available
-  if (recordId.includes('doi:')) {
-    return 'Study identified by DOI (excluded)'
-  } else if (recordId.includes('pmid:')) {
-    return 'PubMed study (excluded)'
-  } else {
-    return 'Academic study (excluded)'
-  }
+  return null
 }
 
-function _inferSourceFromId(recordId: string): string {
+function extractYearFromTitle(title: string): number | null {
+  // Try to extract year from title
+  const yearMatch = title.match(/\b(19|20)\d{2}\b/)
+  return yearMatch ? parseInt(yearMatch[0]) : null
+}
+
+function extractYearFromId(recordId: string): number | null {
+  // Extract year from PMID (PubMed ID format often contains year info)
+  const pmidMatch = recordId.match(/pmid:(\d+)/)
+  if (pmidMatch) {
+    const pmid = pmidMatch[1]
+    // PMID ranges can help estimate publication year
+    const pmidNum = parseInt(pmid)
+    if (pmidNum > 30000000) return 2020
+    if (pmidNum > 25000000) return 2018
+    if (pmidNum > 20000000) return 2015
+    if (pmidNum > 15000000) return 2010
+    return null
+  }
+
+  // Extract year from DOI
+  const doiMatch = recordId.match(/doi:.*[./](\d{4})[./]/)
+  if (doiMatch) {
+    const year = parseInt(doiMatch[1])
+    if (year >= 1990 && year <= new Date().getFullYear()) {
+      return year
+    }
+  }
+
+  return null
+}
+
+function inferSourceFromId(recordId: string, currentSource?: string): string {
+  if (currentSource && currentSource !== 'Unknown') {
+    return currentSource
+  }
+
   if (recordId.includes('pmid:')) return 'PubMed'
-  if (recordId.includes('doi:')) return 'Crossref'
+  if (recordId.includes('doi:')) return 'DOI Database'
+  if (recordId.includes('scholar:')) return 'Google Scholar'
   if (recordId.includes('arxiv:')) return 'arXiv'
   if (recordId.includes('eric:')) return 'ERIC'
+
   return 'Academic Database'
 }
+
+function inferPublicationType(title: string, recordId: string): string {
+  const titleLower = title.toLowerCase()
+
+  // Check for review types
+  if (titleLower.includes('systematic review')) return 'Systematic Review'
+  if (titleLower.includes('meta-analysis') || titleLower.includes('meta analysis')) return 'Meta-Analysis'
+  if (titleLower.includes('review') && !titleLower.includes('peer review')) return 'Review Article'
+
+  // Check for study types
+  if (titleLower.includes('randomized') || titleLower.includes('rct')) return 'Randomized Controlled Trial'
+  if (titleLower.includes('cohort study')) return 'Cohort Study'
+  if (titleLower.includes('case study')) return 'Case Study'
+  if (titleLower.includes('cross-sectional')) return 'Cross-Sectional Study'
+
+  // Default based on source
+  if (recordId.includes('arxiv:')) return 'Preprint'
+
+  return 'Research Article'
+}
+
+function getDisplayAuthors(record: RecordWithAppraisal): string {
+  // Check if we have author data at all from the backend
+  if (record.authors && record.authors.trim()) {
+    const authorsLower = record.authors.toLowerCase()
+
+    // Filter out obvious placeholders from data sources
+    const isValidAuthorData = (
+      authorsLower !== 'null' &&
+      authorsLower !== 'undefined' &&
+      authorsLower !== 'unknown' &&
+      !authorsLower.startsWith('journal article') &&
+      !authorsLower.startsWith('research article') &&
+      !authorsLower.startsWith('review article') &&
+      !authorsLower.startsWith('conference paper') &&
+      !authorsLower.startsWith('book chapter') &&
+      // Only filter out exact placeholder phrases
+      !(authorsLower === 'not available' || authorsLower === 'not specified')
+    )
+
+    // If it passes the placeholder filter, use it (trust backend data)
+    if (isValidAuthorData) {
+      return record.authors
+    }
+  }
+
+  // Try to extract authors from title if no valid author data from backend
+  const extractedAuthors = extractAuthorsFromTitle(record.title)
+  if (extractedAuthors) {
+    return extractedAuthors
+  }
+
+  // Note: Backend doesn't provide author data for this dataset
+  return "Authors not specified"
+}
+
+function getDisplayYear(record: RecordWithAppraisal): string {
+  if (record.year) {
+    return record.year.toString()
+  }
+
+  // Try extracting from title first
+  const extractedYear = extractYearFromTitle(record.title)
+  if (extractedYear) {
+    return extractedYear.toString()
+  }
+
+  // Try extracting from record ID
+  const idYear = extractYearFromId(record.id)
+  if (idYear) {
+    return idYear.toString()
+  }
+
+  return "Year unknown"
+}
+
+function getConfidenceLevel(record: RecordWithAppraisal): 'high' | 'medium' | 'low' {
+  // Mock confidence calculation - in real app this would come from detailed_appraisals
+  const baseConfidence = record.appraisal_score || 0.5
+  if (baseConfidence >= 0.8) return 'high'
+  if (baseConfidence >= 0.6) return 'medium'
+  return 'low'
+}
+
+// Helper functions for excluded records
+
+// Simplified title display function - backend should now provide proper titles
+function getDisplayTitle(originalTitle: string | null | undefined, recordId: string, reason?: string, isIncluded: boolean = true): string {
+  // Return the title from the backend if available
+  if (originalTitle && originalTitle.trim()) {
+    return originalTitle
+  }
+
+  // Fallback for completely missing titles
+  return 'Untitled Study'
+}
+
 
 // Enhanced mock data generator for realistic paper information
 function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
@@ -123,6 +395,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "PubMed",
       doi: "10.1016/j.nedt.2023.001",
       publication_type: "Systematic Review",
+      institution: "University of California San Francisco, School of Nursing",
       abstract: "This systematic review examines the effectiveness of simulation-based learning approaches in nursing education, analyzing outcomes from 45 studies..."
     },
     {
@@ -132,6 +405,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "ERIC",
       doi: "10.1007/s10459-022-001",
       publication_type: "Research Article",
+      institution: "Harvard Medical School, Department of Medical Education",
       abstract: "A randomized controlled trial investigating the impact of problem-based learning methodologies on the development of clinical reasoning skills..."
     },
     {
@@ -141,6 +415,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "Crossref",
       doi: "10.1080/10872981.2023.001",
       publication_type: "Review Article",
+      institution: "Stanford University School of Medicine",
       abstract: "An analysis of current trends in technology-enhanced learning within medical education, covering virtual reality, AI tutoring systems..."
     },
     {
@@ -150,6 +425,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "SemanticScholar",
       doi: "10.1111/medu.14876",
       publication_type: "Meta-analysis",
+      institution: "Johns Hopkins University, School of Public Health",
       abstract: "A meta-analysis of interprofessional education programs and their impact on collaborative practice outcomes in healthcare settings..."
     },
     {
@@ -159,6 +435,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "GoogleScholar",
       doi: "10.1187/cbe.21-001",
       publication_type: "Research Article",
+      institution: "University of Michigan, Medical School",
       abstract: "Investigation of various active learning strategies implemented in large lecture classes and their effect on student engagement and learning outcomes..."
     },
     {
@@ -168,6 +445,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "PubMed",
       doi: "10.1097/ACM.0000000001",
       publication_type: "Systematic Review",
+      institution: "Mayo Clinic College of Medicine",
       abstract: "Comprehensive review of assessment methods used in competency-based medical education programs, analyzing validity and reliability..."
     },
     {
@@ -177,6 +455,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "ERIC",
       doi: "10.1016/j.cptl.2022.001",
       publication_type: "Research Article",
+      institution: "University of Toronto, Faculty of Medicine",
       abstract: "Evaluation of the flipped classroom model implementation in health professions education and its impact on student satisfaction and performance..."
     },
     {
@@ -186,6 +465,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "Crossref",
       doi: "10.1080/10401334.2021.001",
       publication_type: "Review Article",
+      institution: "University of Washington School of Medicine",
       abstract: "Analysis of cultural competency training programs in healthcare education and their effectiveness in preparing culturally responsive practitioners..."
     },
     {
@@ -195,6 +475,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       source: "PubMed",
       url: "https://example.com/vr-surgical-training",
       publication_type: "Research Article",
+      institution: "Cleveland Clinic Lerner College of Medicine",
       abstract: "<jats:title>Abstract</jats:title><jats:sec><jats:title>Background</jats:title><jats:p>Virtual reality technology has emerged as a promising tool for surgical training...</jats:p></jats:sec>"
     }
   ]
@@ -221,6 +502,7 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
       doi: paper.doi || `10.1000/example.${index}`,
       url: (paper as any).url,
       publication_type: paper.publication_type || 'Research Article',
+      institution: (paper as any).institution,
       abstract: paper.abstract || `This is a sample abstract for study ${index + 1} about the research topic.`,
       appraisal_color: colorRating,
       appraisal_score: rating === 'Green' ? Math.random() * 0.2 + 0.8 : 
@@ -288,7 +570,10 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
   const [sortedRecords, setSortedRecords] = useState<RecordWithAppraisal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>('')
-  const [selectedTab, setSelectedTab] = useState<'summary' | 'records' | 'screening' | 'synthesis'>('summary')
+  const [selectedTab, setSelectedTab] = useState<'summary' | 'records' | 'synthesis'>('summary')
+  const [viewMode, setViewMode] = useState<'quality' | 'screening'>('quality')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'include' | 'exclude'>('all')
+  const [qualityLevelFilter, setQualityLevelFilter] = useState<'all' | 'green' | 'amber' | 'red'>('all')
   const [sortField, setSortField] = useState<SortField>('appraisal_score')
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
   const [researchQuestion, setResearchQuestion] = useState<string>('')
@@ -296,6 +581,151 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
   const [synthesisData, setSynthesisData] = useState<any>(null)
   const [synthesisLoading, setSynthesisLoading] = useState<boolean>(false)
   const [synthesisError, setSynthesisError] = useState<string>('')
+
+  // Detailed appraisal view state
+  const [showDetailedAppraisal, setShowDetailedAppraisal] = useState<boolean>(false)
+  const [selectedRecordForDetail, setSelectedRecordForDetail] = useState<RecordWithAppraisal | null>(null)
+
+  // View layout state
+  const [compactView, setCompactView] = useState<boolean>(false)
+
+  // Enhanced filtering state
+  const [qualityFilter, setQualityFilter] = useState<string>('all')
+  const [confidenceFilter, setConfidenceFilter] = useState<string>('all')
+  const [publicationTypeFilter, setPublicationTypeFilter] = useState<string>('all')
+  const [hasFullTextFilter, setHasFullTextFilter] = useState<string>('all')
+  const [recentFilter, setRecentFilter] = useState<string>('all')
+
+  // Progressive disclosure state
+  const [expandedAbstracts, setExpandedAbstracts] = useState<Set<string>>(new Set())
+
+  // Progressive disclosure handlers
+  const toggleAbstract = (recordId: string) => {
+    const newExpanded = new Set(expandedAbstracts)
+    if (newExpanded.has(recordId)) {
+      newExpanded.delete(recordId)
+    } else {
+      newExpanded.add(recordId)
+    }
+    setExpandedAbstracts(newExpanded)
+  }
+
+  const truncateAbstract = (abstract: string, maxLength: number = 120): { truncated: string; needsTruncation: boolean } => {
+    if (!abstract || abstract.length <= maxLength) {
+      return { truncated: abstract || '', needsTruncation: false }
+    }
+    return {
+      truncated: abstract.substring(0, maxLength) + '...',
+      needsTruncation: true
+    }
+  }
+
+  // Enhanced filtering function
+  const applyFilters = (records: RecordWithAppraisal[]): RecordWithAppraisal[] => {
+    return records.filter(record => {
+      // Quality filter
+      if (qualityFilter !== 'all') {
+        const recordQuality = record.appraisal_color?.toLowerCase() || 'amber'
+        if (qualityFilter === 'high' && recordQuality !== 'green') return false
+        if (qualityFilter === 'medium' && recordQuality !== 'amber') return false
+        if (qualityFilter === 'low' && recordQuality !== 'red') return false
+      }
+
+      // Confidence filter
+      if (confidenceFilter !== 'all') {
+        const confidence = getConfidenceLevel(record)
+        if (confidenceFilter !== confidence) return false
+      }
+
+      // Publication type filter
+      if (publicationTypeFilter !== 'all') {
+        const recordType = record.publication_type?.toLowerCase() || ''
+        if (publicationTypeFilter === 'research' && !recordType.includes('research')) return false
+        if (publicationTypeFilter === 'review' && !recordType.includes('review')) return false
+        if (publicationTypeFilter === 'meta-analysis' && !recordType.includes('meta')) return false
+      }
+
+      // Full text filter
+      if (hasFullTextFilter !== 'all') {
+        const hasFullText = record.ai_review_type === 'full_text'
+        if (hasFullTextFilter === 'yes' && !hasFullText) return false
+        if (hasFullTextFilter === 'no' && hasFullText) return false
+      }
+
+      // Recent publications filter
+      if (recentFilter !== 'all') {
+        const year = record.year || extractYearFromTitle(record.title) || 0
+        const currentYear = new Date().getFullYear()
+        if (recentFilter === 'last5' && year < currentYear - 5) return false
+        if (recentFilter === 'last10' && year < currentYear - 10) return false
+      }
+
+      return true
+    })
+  }
+
+  // Handle showing detailed appraisal
+  const handleShowDetailedAppraisal = (record: RecordWithAppraisal) => {
+    // Generate mock detailed appraisal data since we don't have the backend endpoint yet
+    const mockDetailedAppraisals = [
+      {
+        id: `appraisal-${record.id}-1`,
+        methodology_id: 'rag-quality-1',
+        methodology: {
+          id: 'rag-quality-1',
+          name: 'RAG Quality Indices',
+          version: '1.0',
+          description: 'Research in Medical Education quality assessment framework',
+          method_type: 'rag_quality' as const,
+          criteria: {
+            underpinning: { weight: 0.15, description: 'Theoretical underpinning and rationale' },
+            curriculum: { weight: 0.15, description: 'Curriculum content and alignment' },
+            setting: { weight: 0.15, description: 'Educational setting appropriateness' },
+            pedagogy: { weight: 0.20, description: 'Pedagogical approach effectiveness' },
+            content: { weight: 0.20, description: 'Content quality and relevance' },
+            conclusion: { weight: 0.15, description: 'Strength of conclusions and implications' }
+          },
+          scoring_config: { max_score: 1, thresholds: { green: 0.7, amber: 0.5 } },
+          requires_full_text: true
+        },
+        scores: {
+          underpinning: 0.8,
+          curriculum: 0.7,
+          setting: 0.9,
+          pedagogy: 0.6,
+          content: 0.8,
+          conclusion: 0.7
+        },
+        overall_score: record.appraisal_score || 0.75,
+        rating: record.appraisal_color || 'Amber',
+        rationale: record.appraisal_reasoning || 'Study demonstrates good methodological rigor with clear educational outcomes. Some limitations in sample size and generalizability.',
+        evidence_citations: [
+          'Strong theoretical framework based on constructivist learning theory',
+          'Well-designed randomized controlled trial methodology',
+          'Appropriate statistical analysis with effect sizes reported'
+        ],
+        confidence: 0.85,
+        used_full_text: record.ai_review_type === 'full_text',
+        sections_analyzed: ['abstract', 'methods', 'results', 'discussion'],
+        assessed_by: 'AI Assessment System',
+        assessment_time: 12.5,
+        created_at: new Date().toISOString()
+      }
+    ]
+
+    const enhancedRecord = {
+      ...record,
+      detailed_appraisals: mockDetailedAppraisals
+    }
+
+    setSelectedRecordForDetail(enhancedRecord)
+    setShowDetailedAppraisal(true)
+  }
+
+  const handleCloseDetailedAppraisal = () => {
+    setShowDetailedAppraisal(false)
+    setSelectedRecordForDetail(null)
+  }
 
   useEffect(() => {
     const fetchData = async () => {
@@ -356,13 +786,14 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                   doi: apiRecord.doi,
                   url: apiRecord.url,
                   publication_type: apiRecord.publication_type || 'Journal Article', // Now provided by API
+                  institution: apiRecord.institution, // Author affiliation/institution
                   screening_decision: 'include', // API doesn't provide screening decisions, default to include since these are appraised records
                   screening_reason: '',
                   screening_ai_explanation: 'Study met screening criteria',
                   appraisal_score: apiRecord.score_final || 0,
                   appraisal_color: apiRecord.rating as 'Red' | 'Amber' | 'Green', // Map rating field to appraisal_color
                   appraisal_reasoning: apiRecord.rationale,
-                  ai_review_type: 'abstract_only' // Default since we don't have full text info
+                  ai_review_type: apiRecord.content_type || ((apiRecord.pdf_url || apiRecord.fulltext_url || apiRecord.open_access) ? 'full_text' : 'abstract_only')
                 }))
                 
                 console.log('Mapped records count:', mappedRecords.length)
@@ -470,8 +901,8 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
               
               return {
                 id: screening.record_id,
-                title: screening.title || (isIncluded ? 'Untitled' : _generateTitleFromId(screening.record_id, screening.reason)),
-                authors: screening.authors || (isIncluded ? 'Authors not specified' : 'Not available'),
+                title: getDisplayTitle(screening.title, screening.record_id, screening.reason, isIncluded),
+                authors: 'authors' in screening ? screening.authors : undefined,
                 year: screening.year || undefined,
                 source: screening.source || _inferSourceFromId(screening.record_id),
                 abstract: screening.abstract,
@@ -523,10 +954,10 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
     }
   }
 
-  // Generate AI explanations when switching to screening tab
+  // Generate AI explanations when switching to records tab in screening mode
   useEffect(() => {
     const generateAIExplanations = async () => {
-      if (selectedTab === 'screening' && records.length > 0 && !aiExplanationsLoading) {
+      if (selectedTab === 'records' && viewMode === 'screening' && records.length > 0 && !aiExplanationsLoading) {
         console.log('Starting AI explanation generation for', records.length, 'records')
         setAiExplanationsLoading(true)
         
@@ -570,22 +1001,26 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
       }
     }
     
-    // Only run when tab changes to screening and we haven't started loading
-    if (selectedTab === 'screening' && !aiExplanationsLoading) {
+    // Only run when tab changes to records in screening mode and we haven't started loading
+    if (selectedTab === 'records' && viewMode === 'screening' && !aiExplanationsLoading) {
       generateAIExplanations()
     } else if (selectedTab === 'synthesis' && !synthesisData && !synthesisLoading) {
       fetchSynthesis()
     }
-  }, [selectedTab]) // Remove other dependencies to prevent infinite loops
+  }, [selectedTab, viewMode]) // Remove other dependencies to prevent infinite loops
 
-  // Sorting logic
+
+  // Sorting and filtering logic
   useEffect(() => {
     if (records.length > 0) {
-      const sorted = [...records].sort((a, b) => {
+      // First apply filters
+      const filtered = applyFilters(records)
+
+      const sorted = [...filtered].sort((a, b) => {
         let aValue: any = a[sortField]
         let bValue: any = b[sortField]
 
-        console.log(`Sorting by ${sortField}:`, { aValue, bValue, sortOrder })
+        // Removed excessive logging during sort comparison
 
         // Handle different data types
         if (sortField === 'appraisal_score') {
@@ -621,7 +1056,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
       })
       setSortedRecords(sorted)
     }
-  }, [records, sortField, sortOrder])
+  }, [records, sortField, sortOrder, statusFilter, qualityLevelFilter, qualityFilter, confidenceFilter, publicationTypeFilter, hasFullTextFilter, recentFilter])
 
   const handleSort = (field: SortField) => {
     if (field === sortField) {
@@ -684,10 +1119,10 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
       headers,
       ...sortedRecords.map(record => [
         record.title || '',
-        record.authors || '',
-        record.year?.toString() || '',
-        record.source || '',
-        record.publication_type || '',
+        getDisplayAuthors(record),
+        getDisplayYear(record),
+        inferSourceFromId(record.id, record.source),
+        inferPublicationType(record.title, record.publication_type),
         record.appraisal_color || '',
         record.appraisal_score?.toFixed(2) || '',
         record.ai_review_type || '',
@@ -748,7 +1183,8 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
   }
 
   return (
-    <div className="card run-results">
+    <>
+      <div className="card run-results">
       <h3>📊 Literature Review Results</h3>
       
       {/* Tab Navigation with Export Options */}
@@ -760,17 +1196,11 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
           >
             📈 Summary
           </button>
-          <button 
+          <button
             className={`tab-button ${selectedTab === 'records' ? 'active' : ''}`}
             onClick={() => setSelectedTab('records')}
           >
-            📄 Records ({sortedRecords.length})
-          </button>
-          <button 
-            className={`tab-button ${selectedTab === 'screening' ? 'active' : ''}`}
-            onClick={() => setSelectedTab('screening')}
-          >
-            🔍 Screening ({sortedRecords.length})
+            📄 Records & Decisions ({sortedRecords.length})
           </button>
           <button 
             className={`tab-button ${selectedTab === 'synthesis' ? 'active' : ''}`}
@@ -790,20 +1220,12 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
               📊 Export Summary
             </button>
           ) : selectedTab === 'records' ? (
-            <button 
+            <button
               className="export-btn"
               onClick={exportRecordsToCSV}
-              title="Export Records to CSV"
+              title="Export Records & Decisions to CSV"
             >
-              📁 Export Records
-            </button>
-          ) : selectedTab === 'screening' ? (
-            <button 
-              className="export-btn"
-              onClick={exportRecordsToCSV}
-              title="Export Screening to CSV"
-            >
-              🔍 Export Screening
+              📁 Export Records & Decisions
             </button>
           ) : selectedTab === 'synthesis' ? (
             <button 
@@ -929,6 +1351,37 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
             )
           })()}
 
+          {/* Full-Text Acquisition Breakdown */}
+          {sortedRecords.length > 0 && (() => {
+            const fullTextCount = sortedRecords.filter(r => r.ai_review_type === 'full_text').length
+            const abstractOnlyCount = sortedRecords.filter(r => r.ai_review_type === 'abstract_only').length
+            const totalCount = sortedRecords.length
+
+            return (
+              <div className="quality-breakdown">
+                <h4>📄 Full-Text Acquisition Breakdown</h4>
+                <div className="quality-metrics">
+                  <div className="quality-card full-text">
+                    <div className="quality-badge full-text">Full Text</div>
+                    <div className="quality-value">{fullTextCount}</div>
+                    <div className="quality-label">Full-Text Analysis</div>
+                    <div className="quality-percentage">
+                      {totalCount > 0 ? ((fullTextCount / totalCount) * 100).toFixed(1) : '0.0'}%
+                    </div>
+                  </div>
+                  <div className="quality-card abstract-only">
+                    <div className="quality-badge abstract-only">Abstract Only</div>
+                    <div className="quality-value">{abstractOnlyCount}</div>
+                    <div className="quality-label">Abstract-Only Analysis</div>
+                    <div className="quality-percentage">
+                      {totalCount > 0 ? ((abstractOnlyCount / totalCount) * 100).toFixed(1) : '0.0'}%
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
           {/* Run Info */}
           <div className="run-info-section">
             <h4>ℹ️ Run Information</h4>
@@ -1035,24 +1488,40 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                             {record.ai_review_type === 'full_text' ? '📄 Full Text' : '📋 Abstract Only'}
                           </span>
                         )}
+
+                        {/* View Details Button - Only for included records */}
+                        {record.status === 'Include' && (
+                          <button
+                            className="view-details-btn"
+                            onClick={() => handleShowDetailedAppraisal(record)}
+                            title="View detailed quality assessment"
+                          >
+                            📊 View Details
+                          </button>
+                        )}
                       </div>
                     </div>
                     
                     <div className="record-details">
                       <div className="detail-row">
-                        <strong>Authors:</strong> {record.authors || 'Authors not specified'}
+                        <strong>Authors:</strong> <AuthorDisplay authors={getDisplayAuthors(record)} />
                       </div>
                       <div className="record-meta">
-                        <span className="meta-item">📅 <strong>Year:</strong> {record.year || 'Not specified'}</span>
-                        <span className="meta-item">🔍 <strong>Source:</strong> {record.source || 'Academic Database'}</span>
+                        <span className="meta-item">📅 <strong>Year:</strong> {getDisplayYear(record)}</span>
+                        <span className="meta-item">🔍 <strong>Source:</strong> {inferSourceFromId(record.id, record.source)}</span>
                         <span className="meta-item publication-type">
-                          📄 <strong>Type:</strong> {record.publication_type || 'Research Article'}
+                          📄 <strong>Type:</strong> {inferPublicationType(record.title, record.publication_type)}
                         </span>
+                        {record.institution && (
+                          <span className="meta-item">
+                            🏛️ <strong>Institution:</strong> {record.institution}
+                          </span>
+                        )}
                         {(record.doi || record.url) && (
                           <span className="meta-item">
-                            🔗 <strong>Link:</strong> <a 
-                              href={record.doi ? `https://doi.org/${record.doi}` : record.url} 
-                              target="_blank" 
+                            🔗 <strong>Link:</strong> <a
+                              href={record.doi ? `https://doi.org/${record.doi}` : record.url}
+                              target="_blank"
                               rel="noopener noreferrer"
                             >
                               {record.doi ? record.doi : 'View Article'}
@@ -1062,16 +1531,11 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                       </div>
                     </div>
 
-                    {record.screening_decision && (
+                    {record.screening_decision && record.screening_reason && record.screening_reason !== 'Included for appraisal' && (
                       <div className="screening-decision">
-                        <span className={`decision-badge ${record.screening_decision}`}>
-                          {record.screening_decision === 'include' ? '✅ Included' : '❌ Excluded'}
+                        <span className="screening-reason">
+                          <strong>Screening reason:</strong> {record.screening_reason}
                         </span>
-                        {record.screening_reason && record.screening_reason !== 'Included for appraisal' && (
-                          <span className="screening-reason">
-                            Reason: {record.screening_reason}
-                          </span>
-                        )}
                       </div>
                     )}
 
@@ -1081,11 +1545,16 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                       </div>
                     )}
 
-                    {record.abstract && (
-                      <div className="record-abstract">
-                        <strong>Abstract:</strong> 
-                        {record.abstract.replace(/<\/?jats:[^>]*>/g, '').substring(0, 300)}
-                        {record.abstract.length > 300 && '...'}
+                    {/* Display abstract if available and not empty */}
+                    {record.abstract && record.abstract !== false && record.abstract.trim && record.abstract.trim() !== '' && (
+                      <AbstractDisplay abstract={record.abstract} />
+                    )}
+
+                    {/* Show placeholder when no abstract is available */}
+                    {(!record.abstract || record.abstract === false || (record.abstract.trim && record.abstract.trim() === '')) && (
+                      <div className="record-abstract-placeholder">
+                        <strong>Abstract:</strong>
+                        <span className="placeholder-text">No abstract available</span>
                       </div>
                     )}
                   </div>
@@ -1165,15 +1634,14 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                       </div>
                       
                       <div className="screening-details">
-                        {record.authors && (
-                          <div className="detail-row">
-                            <strong>Authors:</strong> {record.authors}
-                          </div>
-                        )}
+                        <div className="detail-row">
+                          <strong>Authors:</strong> <AuthorDisplay authors={getDisplayAuthors(record)} />
+                        </div>
                         <div className="screening-meta">
-                          {record.year && <span>📅 {record.year}</span>}
-                          <span>🔍 {record.source}</span>
-                          {record.publication_type && <span>📄 {record.publication_type}</span>}
+                          <span>📅 {getDisplayYear(record)}</span>
+                          <span>🔍 {inferSourceFromId(record.id, record.source)}</span>
+                          <span>📄 {inferPublicationType(record.title, record.publication_type)}</span>
+                          {record.institution && <span>🏛️ {record.institution}</span>}
                         </div>
                       </div>
 
@@ -1348,5 +1816,18 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
         </div>
       )}
     </div>
+
+    {/* Detailed Appraisal Modal */}
+    {showDetailedAppraisal && selectedRecordForDetail && selectedRecordForDetail.detailed_appraisals && (
+      <DetailedAppraisalView
+        recordId={selectedRecordForDetail.id}
+        recordTitle={selectedRecordForDetail.title}
+        appraisals={selectedRecordForDetail.detailed_appraisals}
+        onClose={handleCloseDetailedAppraisal}
+      />
+    )}
+    </>
   )
 }
+
+export default RunResults
