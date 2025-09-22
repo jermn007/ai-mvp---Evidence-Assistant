@@ -10,7 +10,7 @@ import io
 import csv
 import re
 from collections import Counter, defaultdict
-from typing import Sequence, List, Optional
+from typing import Sequence, List, Optional, Dict, Any
 import importlib
 from types import SimpleNamespace as _NS
 
@@ -45,7 +45,13 @@ from app.models import PressPlan
 from app.press_contract import LICO, DatabaseSpec, PressPlanResponse, PressStrategy, StrategyLine
 from app.press_hits import fill_hits_for_pubmed, _expand_lines_to_queries
 from app.ai_service import get_ai_service, LICOEnhancement, PressStrategyAnalysis, StudyRelevanceAssessment
-from app.research_synthesizer import extract_study_findings, synthesize_research, ResearchSynthesis
+from app.research_synthesizer import (
+    extract_study_findings,
+    synthesize_research,
+    ResearchSynthesis,
+    extract_study_findings_sync,
+    synthesize_research_sync,
+)
 from app.middleware import setup_middleware
 
 # --- DB compatibility layer (works with async or sync app.db) -----------------
@@ -62,6 +68,20 @@ Record = getattr(_db, "Record")
 Appraisal = getattr(_db, "Appraisal")
 Screening = getattr(_db, "Screening", None)
 PrismaCounts = getattr(_db, "PrismaCounts", None)
+
+FULLTEXT_USAGE_CACHE: Dict[str, Dict[str, bool]] = {}
+
+
+def _annotate_full_text_usage(run_id: str, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Attach cached full-text usage flags to exported record rows."""
+    usage = FULLTEXT_USAGE_CACHE.get(run_id, {})
+    annotated: List[Dict[str, Any]] = []
+    for row in rows:
+        mapping = dict(row)
+        record_id = mapping.get("record_id")
+        mapping["full_text_used"] = bool(usage.get(record_id, False)) if record_id else False
+        annotated.append(mapping)
+    return annotated
 
 def _has(name: str) -> bool:
     return hasattr(_db, name) and callable(getattr(_db, name))
@@ -675,7 +695,7 @@ async def export_appraisals_csv(run_id: str):
 
 JOIN_COLS = [
     "record_id", "title", "abstract", "authors", "year", "doi", "url", "source",
-    "publication_type", "institution", "rating", "score_final", "rationale", "run_id"
+    "publication_type", "institution", "rating", "score_final", "rationale", "full_text_used", "run_id"
 ]
 
 @app.get(
@@ -707,7 +727,7 @@ async def export_records_with_appraisals_json(run_id: str):
         Appraisal.record_id == Record.id,
     )
     rows = await _select_mappings(stmt)
-    return rows
+    return _annotate_full_text_usage(run_id, rows)
 
 @app.get("/runs/{run_id}/records_with_appraisals.csv")
 async def export_records_with_appraisals_csv(run_id: str):
@@ -731,7 +751,7 @@ async def export_records_with_appraisals_csv(run_id: str):
         Appraisal.run_id == run_id,
         Appraisal.record_id == Record.id,
     )
-    rows = await _select_mappings(stmt)
+    rows = _annotate_full_text_usage(run_id, await _select_mappings(stmt))
     csv_body = _mappings_to_csv(rows, JOIN_COLS)
     return Response(
         content=csv_body,
@@ -914,7 +934,7 @@ async def export_records_with_appraisals_page(
 
     # Count
     total = await _count_stmt(stmt)
-    rows = await _select_mappings(stmt.offset(offset).limit(limit))
+    rows = _annotate_full_text_usage(run_id, await _select_mappings(stmt.offset(offset).limit(limit)))
     return {"run_id": run_id, "total": total, "limit": limit, "offset": offset, "items": rows}
 
 # ======================= Screenings + Records export ==========================
@@ -2055,15 +2075,33 @@ def generate_research_synthesis(run_id: str, request: ResearchSynthesisRequest):
         logger.info(f"Starting research synthesis for run {run_id} with {len(records_data)} studies")
         
         # Extract study findings with full-text retrieval
-        findings = extract_study_findings(records_data, retrieve_fulltext=request.include_fulltext)
-        
+        findings = extract_study_findings_sync(records_data, retrieve_fulltext=request.include_fulltext)
+
+        # Track which studies contributed full text
+        fulltext_usage: Dict[str, bool] = {}
+        for record, finding in zip(records_data, findings):
+            record_id = record.get("record_id")
+            used_full_text = bool(
+                finding.full_text_content is not None and getattr(finding.full_text_content, "extraction_success", False)
+            )
+            record["full_text_used"] = used_full_text
+            if record_id:
+                fulltext_usage[record_id] = used_full_text
+
+        # Cache per-run usage for downstream exports
+        FULLTEXT_USAGE_CACHE[run_id] = fulltext_usage
+
         # Generate comprehensive synthesis
-        synthesis = synthesize_research(
+        synthesis = synthesize_research_sync(
             findings=findings,
             original_question=research_question,
             lico_components=request.lico_components
         )
-        
+
+        # Ensure response exposes record-based availability
+        if hasattr(synthesis, "full_text_availability"):
+            synthesis.full_text_availability = fulltext_usage
+
         logger.info(f"Research synthesis completed for run {run_id}")
         return synthesis
         

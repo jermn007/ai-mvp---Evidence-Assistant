@@ -21,6 +21,7 @@ logger = logging.getLogger("ai_mvp.research_synthesizer")
 @dataclass
 class StudyFindings:
     """Structured representation of a study's key findings"""
+    record_id: Optional[str]
     title: str
     authors: str
     year: int
@@ -130,6 +131,7 @@ async def extract_study_findings(records: List[Dict[str, Any]], retrieve_fulltex
                 logger.warning(f"Failed to extract supporting quotes: {e}")
         
         finding = StudyFindings(
+            record_id=record.get('record_id'),
             title=title,
             authors=record.get('authors', 'Not specified'),
             year=record.get('year', 0) or 0,
@@ -386,7 +388,9 @@ async def synthesize_research(
             key_recommendations=[],
             knowledge_gaps=["Lack of research literature on this topic"],
             methodological_quality="Cannot assess",
-            future_research_directions=["Initial studies needed on this topic"]
+            future_research_directions=["Initial studies needed on this topic"],
+            supporting_evidence=[],
+            full_text_availability={}
         )
     
     # Prepare comprehensive context for AI synthesis
@@ -547,8 +551,9 @@ def _parse_synthesis_response(response_text: str, findings: List[StudyFindings],
     # Track which studies had full text
     fulltext_availability = {}
     for finding in findings:
-        fulltext_availability[finding.title] = (
-            finding.full_text_content is not None and 
+        key = finding.record_id or finding.title
+        fulltext_availability[key] = (
+            finding.full_text_content is not None and
             finding.full_text_content.extraction_success
         )
     
@@ -587,7 +592,13 @@ def _generate_fallback_synthesis(findings: List[StudyFindings], research_questio
     """Generate basic synthesis when AI fails"""
     high_quality = [f for f in findings if f.quality_rating == 'Green']
     medium_quality = [f for f in findings if f.quality_rating == 'Amber']
-    
+    fulltext_availability = {
+        (f.record_id or f.title): (
+            f.full_text_content is not None and getattr(f.full_text_content, "extraction_success", False)
+        )
+        for f in findings
+    }
+
     return ResearchSynthesis(
         executive_summary=f"Analysis of {len(findings)} studies reveals mixed evidence on the research question. {len(high_quality)} high-quality and {len(medium_quality)} medium-quality studies provide relevant insights.",
         research_question_answer="The current evidence provides preliminary insights but requires more high-quality research for definitive conclusions.",
@@ -606,5 +617,7 @@ def _generate_fallback_synthesis(findings: List[StudyFindings], research_questio
         ],
         knowledge_gaps=["More high-quality studies needed"],
         methodological_quality=f"Mixed ({len(high_quality)} high-quality studies)",
-        future_research_directions=["Rigorous experimental studies needed"]
+        future_research_directions=["Rigorous experimental studies needed"],
+        supporting_evidence=[],
+        full_text_availability=fulltext_availability
     )

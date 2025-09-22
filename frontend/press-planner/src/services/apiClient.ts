@@ -72,7 +72,7 @@ export interface ResearchSynthesis {
   methodological_quality: string
   future_research_directions: string[]
   supporting_evidence: EvidenceSupport[]
-  full_text_availability: Record<string, boolean>
+  full_text_availability: Record<string, boolean> // Keyed by record_id
 }
 
 export class ApiClient {
