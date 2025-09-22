@@ -1,7 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import type { LICO, ApiClient } from '../services/apiClient'
 import { LicoMode } from './LicoMode'
 import { QuestionMode } from './QuestionMode'
+import { LicoSearchPreview } from './LicoSearchPreview'
+import { useValidation, useApiErrorHandler } from '../hooks/useValidation'
+import { validateLico, validateResearchQuestion } from '../utils/validation'
 import './ResearchInput.css'
 
 interface ResearchInputProps {
@@ -29,22 +32,51 @@ export function ResearchInput({
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string>('')
 
+  // Enhanced validation and error handling
+  const { validationState, validateLicoForm, validateQuestionForm, setApiError, clearValidation } = useValidation()
+  const { apiError, isRateLimited, retryAfter, handleApiError, clearError } = useApiErrorHandler()
+
   const hasLicoContent = Object.values(lico).some(value => value.trim() !== '')
   const hasQuestionContent = researchQuestion.trim() !== ''
+
+  // Validate current data when mode or content changes using useMemo to prevent infinite renders
+  const isCurrentModeValid = useMemo(() => {
+    if (mode === 'lico') {
+      return validateLico(lico).isValid
+    } else {
+      return validateResearchQuestion(researchQuestion).isValid
+    }
+  }, [mode, lico, researchQuestion])
 
   const handleModeToggle = (newMode: InputMode) => {
     setMode(newMode)
     setMessage('')
+    clearError()
+    clearValidation()
   }
 
   const handleGenerateQuestion = useCallback(async () => {
+    // Validate LICO first
+    const licoValidation = validateLicoForm(lico)
+    if (!licoValidation.isValid) {
+      setMessage('❌ Please fix LICO validation errors before generating a question')
+      return
+    }
+
     if (!hasLicoContent) {
       setMessage('Please fill in at least one LICO component first')
       return
     }
 
+    // Check if rate limited
+    if (isRateLimited) {
+      setMessage(`⏱️ Rate limited. Please wait ${retryAfter} seconds before trying again.`)
+      return
+    }
+
     setLoading(true)
     setMessage('')
+    clearError()
 
     try {
       const result = await apiClient.generateResearchQuestion(lico)
@@ -53,15 +85,24 @@ export function ResearchInput({
       setMessage('✅ Research question generated successfully!')
     } catch (error) {
       console.error('Error generating question:', error)
-      setMessage(`❌ Failed to generate question: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      handleApiError(error as Error)
+
+      // Set user-friendly message based on error type
+      const err = error as any
+      if (err.isRateLimit) {
+        setMessage(`⏱️ ${err.message}`)
+      } else if (err.isValidation) {
+        setMessage(`❌ Validation error: ${err.message}`)
+        setApiError(err)
+      } else {
+        setMessage(`❌ Failed to generate question: ${err.message}`)
+      }
     } finally {
       setLoading(false)
     }
-  }, [apiClient, lico, hasLicoContent, onResearchQuestionChange])
+  }, [apiClient, lico, hasLicoContent, onResearchQuestionChange, validateLicoForm, isRateLimited, retryAfter, handleApiError, clearError, setApiError])
 
   const handleExtractLico = useCallback(async () => {
-    console.log('handleExtractLico called', { hasQuestionContent, researchQuestion: researchQuestion.substring(0, 50) + '...' })
-    
     if (!hasQuestionContent) {
       setMessage('Please enter a research question first')
       return
@@ -71,14 +112,11 @@ export function ResearchInput({
     setMessage('')
 
     try {
-      console.log('Calling extractLicoFromQuestion API')
       const result = await apiClient.extractLicoFromQuestion(researchQuestion)
-      console.log('Extract LICO result:', result)
-      
+
       // Update each LICO field (set unconditionally to reflect extraction)
       Object.entries(result.lico).forEach(([key, value]) => {
         const val = typeof value === 'string' ? value : (value ?? '')
-        console.log(`Updating LICO field ${key} with value:`, val)
         onLicoChange(key as keyof LICO, val)
       })
       setMode('lico')
@@ -96,9 +134,39 @@ export function ResearchInput({
       <h3>1️⃣ Define Your Research Question</h3>
       <p>Choose your preferred approach to define the research focus</p>
 
-      {message && (
-        <div className={`message ${message.includes('✅') ? 'success' : 'error'}`}>
-          {message}
+      {/* Enhanced message display with validation and rate limiting awareness */}
+      {(message || apiError || validationState.hasErrors || validationState.hasWarnings) && (
+        <div className="message-container">
+          {message && (
+            <div className={`message ${message.includes('✅') ? 'success' : message.includes('⏱️') ? 'rate-limit' : 'error'}`}>
+              {message}
+            </div>
+          )}
+
+          {apiError && (
+            <div className={`message ${isRateLimited ? 'rate-limit' : 'error'}`}>
+              {isRateLimited && retryAfter > 0 && (
+                <div className="rate-limit-countdown">
+                  Rate limited. Retry in {retryAfter}s
+                </div>
+              )}
+              {apiError}
+            </div>
+          )}
+
+          {validationState.hasErrors && (
+            <div className="message validation-error">
+              <div className="validation-title">⚠️ Validation Errors:</div>
+              <div className="validation-details">{validationState.errorMessage}</div>
+            </div>
+          )}
+
+          {validationState.hasWarnings && !validationState.hasErrors && (
+            <div className="message validation-warning">
+              <div className="validation-title">💡 Suggestions:</div>
+              <div className="validation-details">{validationState.warningMessage}</div>
+            </div>
+          )}
         </div>
       )}
 
@@ -132,14 +200,21 @@ export function ResearchInput({
       {/* Input Content */}
       <div className="input-content">
         {mode === 'lico' ? (
-          <LicoMode
-            lico={lico}
-            onChange={onLicoChange}
-            disabled={disabled || loading}
-            onGenerateQuestion={aiAvailable ? handleGenerateQuestion : undefined}
-            canGenerateQuestion={hasLicoContent && aiAvailable}
-            loading={loading}
-          />
+          <>
+            <LicoMode
+              lico={lico}
+              onChange={onLicoChange}
+              disabled={disabled || loading}
+              onGenerateQuestion={aiAvailable ? handleGenerateQuestion : undefined}
+              canGenerateQuestion={hasLicoContent && aiAvailable}
+              loading={loading}
+            />
+            <LicoSearchPreview
+              lico={lico}
+              apiClient={apiClient}
+              disabled={disabled || loading}
+            />
+          </>
         ) : (
           <QuestionMode
             question={researchQuestion}

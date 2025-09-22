@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import logging
+# DEBUG: Force reload to pick up persist.py changes
 from uuid import uuid4
 import asyncio
 import io
@@ -45,6 +46,7 @@ from app.press_contract import LICO, DatabaseSpec, PressPlanResponse, PressStrat
 from app.press_hits import fill_hits_for_pubmed, _expand_lines_to_queries
 from app.ai_service import get_ai_service, LICOEnhancement, PressStrategyAnalysis, StudyRelevanceAssessment
 from app.research_synthesizer import extract_study_findings, synthesize_research, ResearchSynthesis
+from app.middleware import setup_middleware
 
 # --- DB compatibility layer (works with async or sync app.db) -----------------
 _db = importlib.import_module("app.db")
@@ -203,26 +205,10 @@ Supports clinical, education, and general research with domain-specific template
     ]
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Configure comprehensive middleware (logging, monitoring, security, rate limiting)
+setup_middleware(app, enable_rate_limiting=True)
 
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logger.info(f"REQUEST: {request.method} {request.url.path}")
-    try:
-        response = await call_next(request)
-        logger.info(f"RESPONSE: {request.method} {request.url.path} -> {response.status_code}")
-        return response
-    except Exception as e:
-        logger.error(f"REQUEST ERROR: {request.method} {request.url.path} -> {type(e).__name__}: {e}")
-        import traceback
-        logger.error(f"REQUEST ERROR TRACEBACK: {traceback.format_exc()}")
-        raise
+# Note: Request logging now handled by comprehensive middleware in setup_middleware()
 
 GRAPH = get_graph()
 
@@ -654,7 +640,11 @@ async def export_records_csv(run_id: str):
     rows = await _select_stmt(stmt)
     cols = _pick_columns(rows, COLS_RECORD)
     csv_body = _rows_to_csv(rows, cols)
-    return Response(content=csv_body, media_type="text/csv")
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=records_{run_id}.csv"}
+    )
 
 @app.get(
     "/runs/{run_id}/appraisals.json",
@@ -675,13 +665,17 @@ async def export_appraisals_csv(run_id: str):
     rows = await _select_stmt(stmt)
     cols = _pick_columns(rows, COLS_APPRAISAL)
     csv_body = _rows_to_csv(rows, cols)
-    return Response(content=csv_body, media_type="text/csv")
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=appraisals_{run_id}.csv"}
+    )
 
 # ======================= Joined export: records + appraisals ==================
 
 JOIN_COLS = [
-    "record_id", "title", "abstract", "authors", "year", "doi", "url", "source", 
-    "publication_type", "rating", "score_final", "rationale", "run_id"
+    "record_id", "title", "abstract", "authors", "year", "doi", "url", "source",
+    "publication_type", "institution", "rating", "score_final", "rationale", "run_id"
 ]
 
 @app.get(
@@ -702,6 +696,7 @@ async def export_records_with_appraisals_json(run_id: str):
         Record.url,
         case((Record.source == "Scholar", "GoogleScholar"), else_=Record.source).label("source"),
         Record.publication_type,
+        Record.institution,
         Appraisal.rating,
         Appraisal.score_final,
         Appraisal.rationale,
@@ -726,6 +721,7 @@ async def export_records_with_appraisals_csv(run_id: str):
         Record.url,
         case((Record.source == "Scholar", "GoogleScholar"), else_=Record.source).label("source"),
         Record.publication_type,
+        Record.institution,
         Appraisal.rating,
         Appraisal.score_final,
         Appraisal.rationale,
@@ -737,7 +733,11 @@ async def export_records_with_appraisals_csv(run_id: str):
     )
     rows = await _select_mappings(stmt)
     csv_body = _mappings_to_csv(rows, JOIN_COLS)
-    return Response(content=csv_body, media_type="text/csv")
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=records_with_appraisals_{run_id}.csv"}
+    )
 
 # ======================= PRISMA summary ======================================
 
@@ -799,7 +799,11 @@ async def prisma_summary_csv(run_id: str):
     w.writerow(["reason", "count"])
     for k, v in sorted(data.get("exclude_reasons", {}).items(), key=lambda kv: (-kv[1], kv[0])):
         w.writerow([k, v])
-    return Response(content=buf.getvalue(), media_type="text/csv")
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=records_export_{run_id}.csv"}
+    )
 
 # ======================= Joined export: paged + filtered =====================
 
@@ -830,11 +834,17 @@ async def export_records_with_appraisals_page(
         R.year,
         R.doi,
         R.url,
+        R.pdf_url,
+        R.fulltext_url,
+        R.open_access,
         R.source,
         R.publication_type,
+        R.institution,
         A.rating,
         A.score_final,
         A.rationale,
+        A.content_type,
+        A.content_source,
         R.run_id,
     ).where(
         R.run_id == run_id,
@@ -910,7 +920,7 @@ async def export_records_with_appraisals_page(
 # ======================= Screenings + Records export ==========================
 
 SCREEN_COLS = [
-    "record_id", "decision", "reason", "title", "year", "source", "doi", "url", "run_id"
+    "record_id", "decision", "reason", "title", "authors", "year", "source", "doi", "url", "run_id"
 ]
 
 @app.get("/runs/{run_id}/screenings_with_records.json")
@@ -924,6 +934,7 @@ async def export_screenings_with_records_json(run_id: str):
         S.decision.label("decision"),
         S.reason.label("reason"),
         R.title,
+        R.authors,
         R.year,
         case((R.source == "Scholar", "GoogleScholar"), else_=R.source).label("source"),
         R.doi,
@@ -948,6 +959,7 @@ async def export_screenings_with_records_csv(run_id: str):
         S.decision.label("decision"),
         S.reason.label("reason"),
         R.title,
+        R.authors,
         R.year,
         case((R.source == "Scholar", "GoogleScholar"), else_=R.source).label("source"),
         R.doi,
@@ -960,7 +972,11 @@ async def export_screenings_with_records_csv(run_id: str):
     )
     rows = await _select_mappings(stmt)
     csv_body = _mappings_to_csv(rows, SCREEN_COLS)
-    return Response(content=csv_body, media_type="text/csv")
+    return Response(
+        content=csv_body,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=screenings_with_records_{run_id}.csv"}
+    )
 
 @app.get("/runs/{run_id}/screenings_with_records.page.json")
 async def export_screenings_with_records_page(
@@ -986,10 +1002,15 @@ async def export_screenings_with_records_page(
         S.decision.label("decision"),
         S.reason.label("reason"),
         R.title,
+        R.abstract,
+        R.authors,
         R.year,
         case((R.source == "Scholar", "GoogleScholar"), else_=R.source).label("source"),
         R.doi,
         R.url,
+        R.pdf_url,
+        R.fulltext_url,
+        R.open_access,
         R.run_id,
     ).where(
         S.run_id == run_id,
@@ -1712,6 +1733,58 @@ async def make_press_plan_with_hits(body: PressPlanBody):
         plan["strategies"]["MEDLINE"] = _strategy_ns_to_dict(ns)
     return plan
 
+class LICOPreviewBody(BaseModel):
+    """Request model for LICO preview functionality."""
+    lico: LICO
+
+@app.post("/press/plan/preview")
+async def preview_press_strategy(body: LICOPreviewBody):
+    """Preview how LICO terms will be integrated into PRESS search strategy."""
+    # Force reload to register endpoint
+    try:
+        from app.press import plan_press_from_lico, _extract_user_terms, _load_terms, _merge_terms_with_yaml
+
+        # Load existing YAML terms for comparison
+        terms = _load_terms("config/press_terms.yaml")
+
+        # Extract user terms from each LICO component
+        user_terms = {
+            "learner": _extract_user_terms(body.lico.learner),
+            "intervention": _extract_user_terms(body.lico.intervention),
+            "context": _extract_user_terms(body.lico.context),
+            "outcome": _extract_user_terms(body.lico.outcome)
+        }
+
+        # Show merged terms for each component
+        merged_terms = {}
+        for component in ["learner", "intervention", "context", "outcome"]:
+            yaml_component_terms = terms.get(component, {})
+            user_component_terms = user_terms[component]
+            merged = _merge_terms_with_yaml(user_component_terms, yaml_component_terms)
+
+            merged_terms[component] = {
+                "user_extracted": user_component_terms,
+                "yaml_mesh": yaml_component_terms.get("mesh", []),
+                "yaml_text": yaml_component_terms.get("text", []),
+                "final_mesh": merged["mesh"],
+                "final_text": merged["text"]
+            }
+
+        # Generate full PRESS plan for demonstration
+        press_plan = plan_press_from_lico(body.lico)
+
+        return {
+            "lico_input": body.lico.model_dump(),
+            "extracted_terms": user_terms,
+            "merged_terms": merged_terms,
+            "sample_strategy": press_plan.strategies.get("MEDLINE", {}).model_dump() if press_plan.strategies.get("MEDLINE") else {},
+            "message": "This preview shows how your LICO terms will be integrated with existing search terms"
+        }
+
+    except Exception as e:
+        logger.error(f"Error generating PRESS preview: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate preview: {str(e)}")
+
 @app.get("/runs/{run_id}/press.plan.hits.json", response_model=PressPlanResponse)
 async def press_plan_for_run_with_hits(
     run_id: str,
@@ -1881,7 +1954,7 @@ async def ai_generate_research_question(request: LICORequest):
         raise HTTPException(status_code=500, detail=f"Failed to generate research question: {str(e)}")
 
 
-@app.post("/ai/extract-lico") 
+@app.post("/ai/extract-lico")
 async def ai_extract_lico_from_question(request: ResearchQuestionRequest):
     """
     Extract LICO components from a research question.
@@ -1891,7 +1964,10 @@ async def ai_extract_lico_from_question(request: ResearchQuestionRequest):
         lico = await ai_service.extract_lico_from_question(request.question)
         if lico is None:
             raise HTTPException(status_code=503, detail="AI service unavailable")
-        return {"lico": lico}
+
+        response = {"lico": lico}
+        logger.info(f"LICO extraction response: {response}")
+        return response
     except Exception as e:
         logger.error(f"Error extracting LICO from question: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to extract LICO: {str(e)}")
