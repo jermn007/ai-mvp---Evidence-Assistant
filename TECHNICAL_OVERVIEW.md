@@ -210,6 +210,19 @@ methodology_clarity: 0.05  # Study reproducibility
 
 ---
 
+## Full Text Analysis Indicators
+
+The synthesis pipeline now records whether each included study was appraised using full-text evidence or just the abstract. This flag is surfaced across the API and UI to make appraisal depth transparent:
+
+- `/runs/{run_id}/synthesis` runs the full-text pipeline synchronously via `extract_study_findings_sync` / `synthesize_research_sync` so retrieval completes before the response is returned.
+- Each record in `/runs/{run_id}/records_with_appraisals.json`, `.csv`, and `.page.json` includes a new `full_text_used` boolean indicating whether a PDF or HTML article was successfully analyzed.
+- The synthesis response exposes a `full_text_availability` map keyed by `record_id`, making it easy to correlate studies with their appraisal depth.
+- The React client renders badges (“Full text analyzed” vs. “Abstract only”) and tooltips using these flags, and the synthesis panel reuses the same data to label each study.
+
+This transparency helps reviewers prioritise follow-up work (e.g., requesting missing PDFs) and provides a quick audit trail for how confident the AI assessments should be.
+
+---
+
 ## Key Technical Questions Your Colleague Might Ask
 
 **Q: How do you handle rate limiting across multiple academic APIs?**
