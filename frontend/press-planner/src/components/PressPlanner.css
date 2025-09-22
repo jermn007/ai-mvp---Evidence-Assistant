@@ -170,6 +170,12 @@
   color: var(--text-primary);
 }
 
+.run-mode-hint {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin: 0.5rem 0 0;
+}
+
 .card {
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);

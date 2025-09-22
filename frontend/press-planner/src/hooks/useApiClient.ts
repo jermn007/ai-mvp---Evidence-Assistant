@@ -40,8 +40,8 @@ export function useApiClient(baseUrl?: string) {
       apiClient.createPressPlan(params),
 
     // Workflow execution
-    runWithPlan: (plan: any, sources?: string[]) =>
-      apiClient.runWithPlan(plan, sources),
+    runWithPlan: (plan: any, options?: { sources?: string[]; searchMode?: string; maxResultsPerSource?: number }) =>
+      apiClient.runWithPlan(plan, options),
 
     // Results retrieval
     getRunSummary: (runId: string) =>

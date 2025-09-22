@@ -32,6 +32,8 @@ def test_config_loading():
     assert hasattr(config, 'search')
     assert config.search.max_results_per_source == 25
     assert config.search.request_timeout == 30
+    assert isinstance(config.search.modes, dict)
+    assert config.search.modes.get('standard') == config.search.max_results_per_source
     
     print("Configuration loading test passed")
 
