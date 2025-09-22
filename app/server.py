@@ -2054,11 +2054,16 @@ def generate_research_synthesis(run_id: str, request: ResearchSynthesisRequest):
         
         logger.info(f"Starting research synthesis for run {run_id} with {len(records_data)} studies")
         
+        from app.research_synthesizer import (
+            extract_study_findings_sync,
+            synthesize_research_sync,
+        )
+
         # Extract study findings with full-text retrieval
-        findings = extract_study_findings(records_data, retrieve_fulltext=request.include_fulltext)
-        
+        findings = extract_study_findings_sync(records_data, retrieve_fulltext=request.include_fulltext)
+
         # Generate comprehensive synthesis
-        synthesis = synthesize_research(
+        synthesis = synthesize_research_sync(
             findings=findings,
             original_question=research_question,
             lico_components=request.lico_components
@@ -2142,7 +2147,7 @@ def test_real_synthesis(run_id: str):
     try:
         from app.db import get_session
         from sqlalchemy import text
-        from app.research_synthesizer import extract_study_findings, synthesize_research
+        from app.research_synthesizer import extract_study_findings_sync, synthesize_research_sync
         
         with get_session() as db:
             # Get records with appraisals using a simple query
@@ -2175,9 +2180,9 @@ def test_real_synthesis(run_id: str):
             raise HTTPException(status_code=404, detail=f"No appraised records found for run {run_id}")
         
         # Extract study findings and generate synthesis
-        findings = extract_study_findings(records_data, retrieve_fulltext=False)
-        
-        synthesis = synthesize_research(
+        findings = extract_study_findings_sync(records_data, retrieve_fulltext=False)
+
+        synthesis = synthesize_research_sync(
             findings=findings,
             original_question="What does the evidence tell us about medical education interventions and their effectiveness in improving learning outcomes?",
             lico_components=None

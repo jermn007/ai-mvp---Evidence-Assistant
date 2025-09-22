@@ -21,6 +21,7 @@ logger = logging.getLogger("ai_mvp.research_synthesizer")
 @dataclass
 class StudyFindings:
     """Structured representation of a study's key findings"""
+    record_id: Optional[str]
     title: str
     authors: str
     year: int
@@ -32,8 +33,25 @@ class StudyFindings:
     methodology: str
     sample_size: Optional[str]
     limitations: str
+    doi: Optional[str] = None
+    url: Optional[str] = None
+    source: Optional[str] = None
     full_text_content: Optional[FullTextContent] = None
     supporting_quotes: List[SupportingQuote] = None
+
+
+class CitationMetadata(BaseModel):
+    """Citable study metadata that can be rendered in the UI"""
+
+    citation_key: str = Field(description="Short identifier for referencing the study, e.g., S01")
+    title: str = Field(description="Study title")
+    authors: str = Field(description="Author list as provided in the record")
+    year: Optional[int] = Field(default=None, description="Publication year")
+    doi: Optional[str] = Field(default=None, description="Digital object identifier if available")
+    url: Optional[str] = Field(default=None, description="Direct URL to the study")
+    appraisal_score: Optional[float] = Field(default=None, description="Final appraisal score")
+    appraisal_rating: Optional[str] = Field(default=None, description="Color-coded quality rating")
+    record_id: Optional[str] = Field(default=None, description="Internal record identifier")
 
 class LICOInsights(BaseModel):
     """Structured insights for each LICO component"""
@@ -44,24 +62,35 @@ class LICOInsights(BaseModel):
 
 class EvidenceSupport(BaseModel):
     """Supporting evidence with direct quotes"""
+
     finding: str = Field(description="The specific finding or claim")
-    supporting_quotes: List[str] = Field(description="Direct quotes from literature")
-    source_studies: List[str] = Field(description="Studies providing this evidence")
+    supporting_quotes: List[str] = Field(default_factory=list, description="Direct quotes from literature")
+    source_studies: List[str] = Field(default_factory=list, description="Studies providing this evidence")
     strength_rating: str = Field(description="Strength of supporting evidence")
+    citation_keys: List[str] = Field(default_factory=list, description="Reference keys for the cited studies")
+    citations: List[CitationMetadata] = Field(
+        default_factory=list,
+        description="Metadata for each cited study so the UI can render hoverable references",
+    )
 
 class ResearchSynthesis(BaseModel):
     """Comprehensive research synthesis response"""
+
     executive_summary: str = Field(description="High-level synthesis of all findings")
     research_question_answer: str = Field(description="Direct answer to the original research question")
     lico_insights: LICOInsights = Field(description="Detailed insights for each LICO component")
     evidence_strength: str = Field(description="Overall strength of evidence: Strong, Moderate, Limited, Insufficient")
     confidence_level: str = Field(description="Confidence in conclusions: High, Medium, Low")
-    key_recommendations: List[str] = Field(description="Actionable recommendations for instructional designers")
-    knowledge_gaps: List[str] = Field(description="Identified gaps in current research")
+    key_recommendations: List[str] = Field(default_factory=list, description="Actionable recommendations for instructional designers")
+    knowledge_gaps: List[str] = Field(default_factory=list, description="Identified gaps in current research")
     methodological_quality: str = Field(description="Overall assessment of study quality")
-    future_research_directions: List[str] = Field(description="Suggested areas for future investigation")
-    supporting_evidence: List[EvidenceSupport] = Field(description="Key findings with direct quotes and citations")
-    full_text_availability: Dict[str, bool] = Field(description="Which studies had full text available")
+    future_research_directions: List[str] = Field(default_factory=list, description="Suggested areas for future investigation")
+    supporting_evidence: List[EvidenceSupport] = Field(default_factory=list, description="Key findings with direct quotes and citations")
+    full_text_availability: Dict[str, bool] = Field(default_factory=dict, description="Which studies had full text available")
+    study_citations: Dict[str, CitationMetadata] = Field(
+        default_factory=dict,
+        description="Map of citation keys to metadata for all studies referenced in the synthesis",
+    )
 
 class StatisticalSummary(BaseModel):
     """Statistical summary of the literature"""
@@ -130,6 +159,7 @@ async def extract_study_findings(records: List[Dict[str, Any]], retrieve_fulltex
                 logger.warning(f"Failed to extract supporting quotes: {e}")
         
         finding = StudyFindings(
+            record_id=str(record.get('record_id')) if record.get('record_id') is not None else None,
             title=title,
             authors=record.get('authors', 'Not specified'),
             year=record.get('year', 0) or 0,
@@ -141,6 +171,9 @@ async def extract_study_findings(records: List[Dict[str, Any]], retrieve_fulltex
             methodology=_infer_methodology(title, key_text),
             sample_size=_extract_sample_size(key_text),
             limitations=_extract_limitations(key_text),
+            doi=record.get('doi'),
+            url=record.get('url'),
+            source=record.get('source'),
             full_text_content=full_text_content,
             supporting_quotes=supporting_quotes
         )
@@ -386,7 +419,10 @@ async def synthesize_research(
             key_recommendations=[],
             knowledge_gaps=["Lack of research literature on this topic"],
             methodological_quality="Cannot assess",
-            future_research_directions=["Initial studies needed on this topic"]
+            future_research_directions=["Initial studies needed on this topic"],
+            supporting_evidence=[],
+            full_text_availability={},
+            study_citations={},
         )
     
     # Prepare comprehensive context for AI synthesis
@@ -516,7 +552,7 @@ def _prepare_quotes_context(quotes: List[SupportingQuote], findings: List[StudyF
     """Prepare formatted quotes context for AI synthesis"""
     if not quotes:
         return "No direct quotes available - analysis based on abstracts only."
-    
+
     quote_contexts = []
     for i, quote in enumerate(quotes[:10]):  # Limit to top 10 quotes
         quote_context = f"""
@@ -525,86 +561,381 @@ QUOTE {i+1} (Relevance: {quote.relevance_score:.2f}):
 Context: {quote.context[:200]}...
 """
         quote_contexts.append(quote_context)
-    
+
     return "\n".join(quote_contexts)
 
-def _parse_synthesis_response(response_text: str, findings: List[StudyFindings], supporting_quotes: List[SupportingQuote]) -> ResearchSynthesis:
-    """Parse AI response into structured ResearchSynthesis object"""
-    
-    # Create supporting evidence with quotes
-    supporting_evidence = []
-    if supporting_quotes:
-        # Group quotes by theme
-        for quote in supporting_quotes[:5]:  # Top 5 quotes
-            evidence = EvidenceSupport(
-                finding=quote.quote_text[:100] + "...",
-                supporting_quotes=[quote.quote_text],
-                source_studies=[f.title for f in findings if f.supporting_quotes and quote in f.supporting_quotes][:3],
-                strength_rating="Strong" if quote.relevance_score > 0.7 else "Moderate" if quote.relevance_score > 0.4 else "Limited"
-            )
-            supporting_evidence.append(evidence)
-    
-    # Track which studies had full text
-    fulltext_availability = {}
-    for finding in findings:
-        fulltext_availability[finding.title] = (
-            finding.full_text_content is not None and 
-            finding.full_text_content.extraction_success
-        )
-    
-    # Default structured response with enhanced evidence support
-    return ResearchSynthesis(
-        executive_summary=response_text[:500] + "..." if len(response_text) > 500 else response_text,
-        research_question_answer="Based on the available evidence, " + response_text[500:1000] if len(response_text) > 1000 else response_text,
-        lico_insights=LICOInsights(
-            learner_insights="Evidence suggests diverse learner populations were studied with varying characteristics and needs.",
-            intervention_insights="Multiple intervention approaches were evaluated, showing varied effectiveness across contexts.",
-            context_insights="Various educational contexts were examined, from traditional classrooms to online environments.",
-            outcome_insights="Positive learning outcomes were generally reported, including knowledge gains and skill development."
+
+def _rank_findings_by_quality(findings: List[StudyFindings]) -> List[StudyFindings]:
+    """Order studies by quality score, rating, then recency."""
+
+    rating_priority = {"Green": 3, "Amber": 2, "Red": 1}
+    return sorted(
+        findings,
+        key=lambda f: (
+            f.quality_score or 0.0,
+            rating_priority.get(f.quality_rating, 0),
+            f.year or 0,
         ),
-        evidence_strength="Strong" if len([f for f in findings if f.quality_rating == 'Green']) >= 5 else "Moderate",
-        confidence_level="High" if len(supporting_quotes) > 10 else "Medium",
-        key_recommendations=[
-            "Base instructional design decisions on evidence from high-quality studies",
-            "Consider learner characteristics when designing interventions",
-            "Adapt interventions to specific educational contexts",
-            "Measure multiple outcome indicators for comprehensive assessment",
-            "Use evidence-based instructional strategies with proven effectiveness"
-        ],
-        knowledge_gaps=["More diverse populations needed", "Long-term outcomes unclear", "Implementation fidelity measures lacking"],
-        methodological_quality=f"Mixed quality: {len([f for f in findings if f.quality_rating == 'Green'])} high-quality studies",
-        future_research_directions=[
-            "Longitudinal studies to assess lasting impact",
-            "More rigorous experimental designs",
-            "Cross-cultural validation studies",
-            "Implementation research in authentic settings"
-        ],
+        reverse=True,
+    )
+
+
+def _build_citation_map(findings: List[StudyFindings]) -> Dict[str, CitationMetadata]:
+    """Create citation metadata keyed by short reference identifiers."""
+
+    citations: Dict[str, CitationMetadata] = {}
+    for idx, finding in enumerate(findings):
+        key = f"S{idx + 1:02d}"
+        citations[key] = CitationMetadata(
+            citation_key=key,
+            title=finding.title,
+            authors=finding.authors,
+            year=finding.year if finding.year else None,
+            doi=finding.doi,
+            url=finding.url,
+            appraisal_score=finding.quality_score if finding.quality_score else None,
+            appraisal_rating=finding.quality_rating,
+            record_id=finding.record_id,
+        )
+    return citations
+
+
+def _clean_text(text: Optional[str], max_length: int = 280) -> str:
+    """Normalize whitespace and trim to a readable length."""
+
+    if not text:
+        return "Not specified"
+
+    cleaned = " ".join((text or "").split())
+    if len(cleaned) <= max_length:
+        return cleaned
+
+    truncated = cleaned[:max_length].rsplit(" ", 1)[0].strip()
+    return truncated + "..."
+
+
+def _strength_from_quality(finding: StudyFindings) -> str:
+    """Derive an evidence strength label from appraisal data."""
+
+    score = finding.quality_score or 0.0
+    if score >= 0.75:
+        return "Strong"
+    if score >= 0.5:
+        return "Moderate"
+    return "Limited"
+
+
+def _compose_top_quality_sentence(findings: List[StudyFindings], citations: Dict[str, CitationMetadata]) -> str:
+    """Describe which studies provide the strongest evidence."""
+
+    if not findings:
+        return "No appraised studies were available to summarize."
+
+    highlights = []
+    for finding, key in zip(findings[:3], list(citations.keys())[:3]):
+        citation = citations[key]
+        descriptor = f"[{key}] {citation.title}"
+        if citation.appraisal_score is not None:
+            descriptor += f" (score {citation.appraisal_score:.2f}"
+            if citation.appraisal_rating:
+                descriptor += f", {citation.appraisal_rating}"
+            descriptor += ")"
+        elif citation.appraisal_rating:
+            descriptor += f" ({citation.appraisal_rating})"
+        highlights.append(descriptor)
+
+    return "Top-rated evidence includes " + "; ".join(highlights) + "."
+
+
+def _summarize_findings(findings: List[StudyFindings], citations: Dict[str, CitationMetadata]) -> str:
+    """Provide a concise synthesis referencing citation keys."""
+
+    if not findings:
+        return "Insufficient evidence to address the research question."
+
+    summaries = []
+    for finding, key in zip(findings[:3], list(citations.keys())[:3]):
+        snippet = _clean_text(finding.key_findings, 260)
+        summaries.append(f"[{key}] {snippet}")
+
+    return " ".join(summaries)
+
+
+def _overall_evidence_strength(findings: List[StudyFindings]) -> str:
+    """Compute overall evidence strength from quality ratings."""
+
+    if not findings:
+        return "Insufficient"
+
+    high_quality = sum(1 for f in findings if (f.quality_score or 0) >= 0.75 or f.quality_rating == "Green")
+    moderate_quality = sum(1 for f in findings if 0.5 <= (f.quality_score or 0) < 0.75 or f.quality_rating == "Amber")
+
+    if high_quality >= 3:
+        return "Strong"
+    if high_quality >= 1 or moderate_quality >= 3:
+        return "Moderate"
+    if high_quality + moderate_quality > 0:
+        return "Limited"
+    return "Insufficient"
+
+
+def _estimate_confidence_level(findings: List[StudyFindings]) -> str:
+    """Estimate confidence in conclusions based on evidence mix."""
+
+    if not findings:
+        return "Low"
+
+    strength = _overall_evidence_strength(findings)
+    if strength == "Strong":
+        return "High"
+    if strength == "Moderate":
+        return "Medium"
+    return "Low"
+
+
+def _describe_methodological_quality(findings: List[StudyFindings]) -> str:
+    """Generate a short description of study quality distribution."""
+
+    if not findings:
+        return "No studies appraised."
+
+    rating_counts: Dict[str, int] = {}
+    for finding in findings:
+        rating_counts[finding.quality_rating] = rating_counts.get(finding.quality_rating, 0) + 1
+
+    parts = [f"{count} {rating}" for rating, count in sorted(rating_counts.items(), key=lambda x: x[0])]
+    avg_score = [f.quality_score for f in findings if f.quality_score]
+    avg_text = f"average appraisal score {sum(avg_score)/len(avg_score):.2f}" if avg_score else "no appraisal scores recorded"
+    return "; ".join(parts) + f"; {avg_text}"
+
+
+def _build_supporting_evidence(
+    findings: List[StudyFindings],
+    citations: Dict[str, CitationMetadata],
+) -> List[EvidenceSupport]:
+    """Create structured supporting evidence entries from high-quality studies."""
+
+    evidence: List[EvidenceSupport] = []
+    citation_keys = list(citations.keys())
+
+    for finding, key in zip(findings[:5], citation_keys[:5]):
+        quotes = [q.quote_text for q in (finding.supporting_quotes or []) if getattr(q, "quote_text", None)]
+        if not quotes and finding.key_findings:
+            quotes = [_clean_text(finding.key_findings, 220)]
+
+        evidence.append(
+            EvidenceSupport(
+                finding=_clean_text(finding.key_findings, 320),
+                supporting_quotes=quotes[:3],
+                source_studies=[finding.title] if finding.title else [],
+                strength_rating=_strength_from_quality(finding),
+                citation_keys=[key],
+                citations=[citations[key]],
+            )
+        )
+
+    return evidence
+
+
+def _build_fulltext_availability(
+    findings: List[StudyFindings],
+    citations: Dict[str, CitationMetadata],
+) -> Dict[str, bool]:
+    """Map citation keys and titles to full-text retrieval success."""
+
+    availability: Dict[str, bool] = {}
+    for finding, key in zip(findings, citations.keys()):
+        has_fulltext = (
+            finding.full_text_content is not None
+            and finding.full_text_content.extraction_success
+        )
+        availability[f"[{key}] {finding.title}"] = has_fulltext
+
+    return availability
+
+
+def _derive_recommendations(findings: List[StudyFindings], citations: Dict[str, CitationMetadata]) -> List[str]:
+    """Create actionable recommendations referencing strong studies."""
+
+    recs: List[str] = []
+    top_keys = list(citations.keys())[:3]
+    if top_keys:
+        recs.append(
+            "Ground instructional design updates in the interventions tested in "
+            + ", ".join(f"[{key}]" for key in top_keys)
+            + " to mirror high-quality evidence."
+        )
+
+    if any(not finding.sample_size for finding in findings[:5]):
+        recs.append("Report detailed learner characteristics and sample sizes to strengthen future appraisals.")
+
+    if any((finding.supporting_quotes or []) for finding in findings[:5]):
+        recs.append("Use direct participant quotes from high-quality studies to illustrate persuasive evidence in stakeholder communications.")
+
+    while len(recs) < 3:
+        defaults = [
+            "Align interventions with learner needs and contextual factors documented across the literature.",
+            "Monitor implementation fidelity when translating research-backed strategies into practice.",
+            "Combine quantitative outcomes with qualitative feedback to capture comprehensive impact.",
+        ]
+        for item in defaults:
+            if item not in recs:
+                recs.append(item)
+            if len(recs) >= 3:
+                break
+
+    return recs[:5]
+
+
+def _derive_knowledge_gaps(findings: List[StudyFindings], citations: Dict[str, CitationMetadata]) -> List[str]:
+    """Highlight gaps surfaced in the appraised literature."""
+
+    gaps: List[str] = []
+    contexts_missing = [
+        (finding, key)
+        for finding, key in zip(findings, citations.keys())
+        if finding.lico_relevance.get("context", "Not specified") == "Not specified"
+    ]
+    if contexts_missing:
+        keys = [f"[{key}]" for _, key in contexts_missing[:3]]
+        gaps.append("Limited reporting on implementation contexts in " + ", ".join(keys) + ".")
+
+    long_term_unknown = [
+        (finding, key)
+        for finding, key in zip(findings, citations.keys())
+        if "long" in (finding.limitations or "").lower()
+    ]
+    if long_term_unknown:
+        keys = [f"[{key}]" for _, key in long_term_unknown[:3]]
+        gaps.append("Long-term outcome data remains sparse in " + ", ".join(keys) + ".")
+
+    if not gaps:
+        gaps = [
+            "Need more diverse populations and settings to broaden generalizability.",
+            "Few studies track sustained outcomes beyond immediate post-tests.",
+        ]
+
+    return gaps[:3]
+
+
+def _derive_future_research(findings: List[StudyFindings], citations: Dict[str, CitationMetadata]) -> List[str]:
+    """Suggest future research directions informed by limitations."""
+
+    directions: List[str] = []
+    if any(f.methodology == "Randomized Controlled Trial" for f in findings):
+        directions.append("Replicate high-quality trials in varied educational settings to confirm effectiveness.")
+
+    if any(not f.supporting_quotes for f in findings[:5]):
+        directions.append("Pair quantitative outcomes with qualitative analyses to capture learner experience depth.")
+
+    if not directions:
+        directions = [
+            "Conduct longitudinal studies to observe persistence of learning gains.",
+            "Explore implementation factors that facilitate scaling of successful interventions.",
+        ]
+
+    return directions[:4]
+
+def _parse_synthesis_response(
+    response_text: str,
+    findings: List[StudyFindings],
+    supporting_quotes: List[SupportingQuote],
+) -> ResearchSynthesis:
+    """Parse AI response into structured ResearchSynthesis object."""
+
+    ranked_findings = _rank_findings_by_quality(findings)
+    citations = _build_citation_map(ranked_findings)
+
+    cleaned_response = response_text.strip() if response_text else ""
+    if cleaned_response.lower() == "mock response":
+        cleaned_response = ""
+
+    executive_summary_parts = []
+    if cleaned_response:
+        executive_summary_parts.append(_clean_text(cleaned_response, 1200))
+    executive_summary_parts.append(_compose_top_quality_sentence(ranked_findings, citations))
+    executive_summary = " ".join(part for part in executive_summary_parts if part)
+
+    research_answer = _summarize_findings(ranked_findings, citations)
+
+    supporting_evidence = _build_supporting_evidence(ranked_findings, citations)
+    if not supporting_evidence and supporting_quotes:
+        for quote, key in zip(supporting_quotes[:3], citations.keys()):
+            supporting_evidence.append(
+                EvidenceSupport(
+                    finding=_clean_text(quote.quote_text, 200),
+                    supporting_quotes=[quote.quote_text],
+                    source_studies=[citations[key].title],
+                    strength_rating="Moderate",
+                    citation_keys=[key],
+                    citations=[citations[key]],
+                )
+            )
+
+    lico_insights = LICOInsights(
+        learner_insights="; ".join(
+            _clean_text(f.lico_relevance.get("learner"), 160) for f in ranked_findings[:3]
+        ) or "Learner characteristics were variably reported.",
+        intervention_insights="; ".join(
+            _clean_text(f.lico_relevance.get("intervention"), 160) for f in ranked_findings[:3]
+        ) or "Intervention details were limited across studies.",
+        context_insights="; ".join(
+            _clean_text(f.lico_relevance.get("context"), 160) for f in ranked_findings[:3]
+        ) or "Contextual information was seldom provided.",
+        outcome_insights="; ".join(
+            _clean_text(f.lico_relevance.get("outcome"), 160) for f in ranked_findings[:3]
+        ) or "Outcome reporting focused on immediate learning metrics.",
+    )
+
+    return ResearchSynthesis(
+        executive_summary=executive_summary,
+        research_question_answer=research_answer,
+        lico_insights=lico_insights,
+        evidence_strength=_overall_evidence_strength(ranked_findings),
+        confidence_level=_estimate_confidence_level(ranked_findings),
+        key_recommendations=_derive_recommendations(ranked_findings, citations),
+        knowledge_gaps=_derive_knowledge_gaps(ranked_findings, citations),
+        methodological_quality=_describe_methodological_quality(ranked_findings),
+        future_research_directions=_derive_future_research(ranked_findings, citations),
         supporting_evidence=supporting_evidence,
-        full_text_availability=fulltext_availability
+        full_text_availability=_build_fulltext_availability(ranked_findings, citations),
+        study_citations=citations,
     )
 
 def _generate_fallback_synthesis(findings: List[StudyFindings], research_question: str) -> ResearchSynthesis:
     """Generate basic synthesis when AI fails"""
-    high_quality = [f for f in findings if f.quality_rating == 'Green']
-    medium_quality = [f for f in findings if f.quality_rating == 'Amber']
-    
+    ranked_findings = _rank_findings_by_quality(findings)
+    citations = _build_citation_map(ranked_findings)
+
+    executive_summary = (
+        f"Analysis of {len(findings)} appraised studies informs the research question. "
+        + _compose_top_quality_sentence(ranked_findings, citations)
+    )
+
     return ResearchSynthesis(
-        executive_summary=f"Analysis of {len(findings)} studies reveals mixed evidence on the research question. {len(high_quality)} high-quality and {len(medium_quality)} medium-quality studies provide relevant insights.",
-        research_question_answer="The current evidence provides preliminary insights but requires more high-quality research for definitive conclusions.",
+        executive_summary=executive_summary,
+        research_question_answer=_summarize_findings(ranked_findings, citations),
         lico_insights=LICOInsights(
-            learner_insights="Multiple learner populations represented in the literature.",
-            intervention_insights="Various intervention approaches have been studied.",
-            context_insights="Different educational contexts examined.",
-            outcome_insights="Positive outcomes generally reported."
+            learner_insights="; ".join(
+                _clean_text(f.lico_relevance.get("learner"), 160) for f in ranked_findings[:3]
+            ) or "Learner characteristics were variably reported.",
+            intervention_insights="; ".join(
+                _clean_text(f.lico_relevance.get("intervention"), 160) for f in ranked_findings[:3]
+            ) or "Intervention details were limited across studies.",
+            context_insights="; ".join(
+                _clean_text(f.lico_relevance.get("context"), 160) for f in ranked_findings[:3]
+            ) or "Contextual information was seldom provided.",
+            outcome_insights="; ".join(
+                _clean_text(f.lico_relevance.get("outcome"), 160) for f in ranked_findings[:3]
+            ) or "Outcome reporting focused on immediate learning metrics.",
         ),
-        evidence_strength="Limited" if len(high_quality) < 3 else "Moderate",
-        confidence_level="Medium",
-        key_recommendations=[
-            "Base decisions on highest quality evidence available",
-            "Consider context-specific factors",
-            "Monitor outcomes carefully"
-        ],
-        knowledge_gaps=["More high-quality studies needed"],
-        methodological_quality=f"Mixed ({len(high_quality)} high-quality studies)",
-        future_research_directions=["Rigorous experimental studies needed"]
+        evidence_strength=_overall_evidence_strength(ranked_findings),
+        confidence_level=_estimate_confidence_level(ranked_findings),
+        key_recommendations=_derive_recommendations(ranked_findings, citations),
+        knowledge_gaps=_derive_knowledge_gaps(ranked_findings, citations),
+        methodological_quality=_describe_methodological_quality(ranked_findings),
+        future_research_directions=_derive_future_research(ranked_findings, citations),
+        supporting_evidence=_build_supporting_evidence(ranked_findings, citations),
+        full_text_availability=_build_fulltext_availability(ranked_findings, citations),
+        study_citations=citations,
     )

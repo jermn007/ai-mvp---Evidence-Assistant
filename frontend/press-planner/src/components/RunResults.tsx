@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { ApiClient } from '../services/apiClient'
+import type { CitationMetadata } from '../services/apiClient'
 import { DetailedAppraisalView } from './DetailedAppraisalView'
 import './RunResults.css'
 
@@ -938,7 +939,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
 
   const fetchSynthesis = async () => {
     if (!runId || !summary) return
-    
+
     setSynthesisLoading(true)
     setSynthesisError('')
     
@@ -953,6 +954,58 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
       setSynthesisLoading(false)
     }
   }
+
+  const renderCitation = (citation: CitationMetadata) => {
+    const doiUrl = citation.doi ? `https://doi.org/${citation.doi}` : undefined
+    const links: { href: string; label: string }[] = []
+
+    if (citation.url) {
+      links.push({ href: citation.url, label: 'View study' })
+    }
+    if (doiUrl) {
+      links.push({ href: doiUrl, label: `doi:${citation.doi}` })
+    }
+
+    const hasScore = typeof citation.appraisal_score === 'number' && !Number.isNaN(citation.appraisal_score)
+
+    return (
+      <li key={citation.citation_key} className="citation-item">
+        <div className="citation-header">
+          <span className="citation-key-badge">[{citation.citation_key}]</span>
+          {citation.appraisal_rating && (
+            <span className={`citation-rating-badge ${citation.appraisal_rating.toLowerCase()}`}>
+              {citation.appraisal_rating}
+            </span>
+          )}
+          {hasScore && <span className="citation-score">Score {citation.appraisal_score?.toFixed(2)}</span>}
+        </div>
+        <div className="citation-body">
+          <div className="citation-title">{citation.title}</div>
+          <div className="citation-meta">
+            <span className="citation-authors">{citation.authors}</span>
+            {citation.year && <span className="citation-year">({citation.year})</span>}
+          </div>
+          {links.length > 0 && (
+            <div className="citation-links">
+              {links.map(link => (
+                <a key={link.href} href={link.href} target="_blank" rel="noopener noreferrer">
+                  {link.label}
+                </a>
+              ))}
+            </div>
+          )}
+        </div>
+      </li>
+    )
+  }
+
+  const studyCitations: CitationMetadata[] = synthesisData?.study_citations
+    ? (Object.values(synthesisData.study_citations) as CitationMetadata[])
+    : []
+
+  const fullTextAvailabilityEntries: [string, boolean][] = synthesisData?.full_text_availability
+    ? (Object.entries(synthesisData.full_text_availability) as [string, boolean][])
+    : []
 
   // Generate AI explanations when switching to records tab in screening mode
   useEffect(() => {
@@ -1731,9 +1784,18 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                   <h4>📚 Supporting Evidence</h4>
                   {synthesisData.supporting_evidence.map((evidence: any, idx: number) => (
                     <div key={idx} className="evidence-item">
-                      <h5 className="evidence-finding">🔍 {evidence.finding}</h5>
+                      <h5 className="evidence-finding">
+                        🔍 {evidence.finding}
+                        {evidence.citation_keys && evidence.citation_keys.length > 0 && (
+                          <span className="citation-badges">
+                            {evidence.citation_keys.map((key: string) => (
+                              <span key={key} className="citation-key-badge inline">[{key}]</span>
+                            ))}
+                          </span>
+                        )}
+                      </h5>
                       <p className="evidence-strength">Strength: {evidence.strength_rating}</p>
-                      
+
                       {evidence.supporting_quotes && evidence.supporting_quotes.length > 0 && (
                         <div className="supporting-quotes">
                           <h6>📝 Direct Quotes:</h6>
@@ -1752,6 +1814,15 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                             {evidence.source_studies.map((study: string, sIdx: number) => (
                               <li key={sIdx}>{study}</li>
                             ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {evidence.citations && evidence.citations.length > 0 && (
+                        <div className="citation-details">
+                          <h6>🔗 Citations:</h6>
+                          <ul className="citation-list">
+                            {evidence.citations.map((citation: CitationMetadata) => renderCitation(citation))}
                           </ul>
                         </div>
                       )}
@@ -1796,12 +1867,25 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                 <div className="synthesis-section">
                   <h4>📄 Full Text Availability</h4>
                   <div className="full-text-status">
-                    {Object.entries(synthesisData.full_text_availability).map(([studyId, available]) => (
-                      <div key={studyId} className={`availability-item ${available ? 'available' : 'not-available'}`}>
-                        <span>{studyId}: {available ? '✅ Available' : '❌ Not Available'}</span>
-                      </div>
-                    ))}
+                    {studyCitations.map(citation => {
+                      const availability = fullTextAvailabilityEntries.find(([label]) => label.includes(`[${citation.citation_key}]`))
+                      const isAvailable = availability ? Boolean(availability[1]) : false
+                      return (
+                        <div key={citation.citation_key} className={`availability-item ${isAvailable ? 'available' : 'not-available'}`}>
+                          <span>[{citation.citation_key}] {citation.title}: {isAvailable ? '✅ Available' : '❌ Not Available'}</span>
+                        </div>
+                      )
+                    })}
                   </div>
+                </div>
+              )}
+
+              {studyCitations.length > 0 && (
+                <div className="synthesis-section">
+                  <h4>📑 Study References</h4>
+                  <ul className="citation-list">
+                    {studyCitations.map(citation => renderCitation(citation))}
+                  </ul>
                 </div>
               )}
             </div>

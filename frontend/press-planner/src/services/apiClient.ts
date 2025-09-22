@@ -54,11 +54,25 @@ export interface LICOInsights {
   outcome_insights: string
 }
 
+export interface CitationMetadata {
+  citation_key: string
+  title: string
+  authors: string
+  year?: number
+  doi?: string | null
+  url?: string | null
+  appraisal_score?: number | null
+  appraisal_rating?: string | null
+  record_id?: string | null
+}
+
 export interface EvidenceSupport {
   finding: string
   supporting_quotes: string[]
   source_studies: string[]
   strength_rating: string
+  citation_keys: string[]
+  citations: CitationMetadata[]
 }
 
 export interface ResearchSynthesis {
@@ -73,6 +87,7 @@ export interface ResearchSynthesis {
   future_research_directions: string[]
   supporting_evidence: EvidenceSupport[]
   full_text_availability: Record<string, boolean>
+  study_citations: Record<string, CitationMetadata>
 }
 
 export class ApiClient {
