@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import logging
+from enum import Enum
 # DEBUG: Force reload to pick up persist.py changes
 from uuid import uuid4
 import asyncio
@@ -10,14 +11,14 @@ import io
 import csv
 import re
 from collections import Counter, defaultdict
-from typing import Sequence, List, Optional
+from typing import Sequence, List, Optional, Dict, Any
 import importlib
 from types import SimpleNamespace as _NS
 
 from fastapi import FastAPI, HTTPException, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select, or_, func, cast, case
 from sqlalchemy.types import Float as SA_Float
 from app.utils.strings import strip_or_empty, norm_lower
@@ -38,6 +39,7 @@ from app.sources import (
     scholar_serpapi_async,
 )
 from app.graph.build import get_graph, CHECKPOINTER
+from app.config import get_config
 from app.persist import persist_run
 from app.models import PressPlan
 
@@ -45,7 +47,13 @@ from app.models import PressPlan
 from app.press_contract import LICO, DatabaseSpec, PressPlanResponse, PressStrategy, StrategyLine
 from app.press_hits import fill_hits_for_pubmed, _expand_lines_to_queries
 from app.ai_service import get_ai_service, LICOEnhancement, PressStrategyAnalysis, StudyRelevanceAssessment
-from app.research_synthesizer import extract_study_findings, synthesize_research, ResearchSynthesis
+from app.research_synthesizer import (
+    extract_study_findings,
+    synthesize_research,
+    ResearchSynthesis,
+    extract_study_findings_sync,
+    synthesize_research_sync,
+)
 from app.middleware import setup_middleware
 
 # --- DB compatibility layer (works with async or sync app.db) -----------------
@@ -62,6 +70,20 @@ Record = getattr(_db, "Record")
 Appraisal = getattr(_db, "Appraisal")
 Screening = getattr(_db, "Screening", None)
 PrismaCounts = getattr(_db, "PrismaCounts", None)
+
+FULLTEXT_USAGE_CACHE: Dict[str, Dict[str, bool]] = {}
+
+
+def _annotate_full_text_usage(run_id: str, rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Attach cached full-text usage flags to exported record rows."""
+    usage = FULLTEXT_USAGE_CACHE.get(run_id, {})
+    annotated: List[Dict[str, Any]] = []
+    for row in rows:
+        mapping = dict(row)
+        record_id = mapping.get("record_id")
+        mapping["full_text_used"] = bool(usage.get(record_id, False)) if record_id else False
+        annotated.append(mapping)
+    return annotated
 
 def _has(name: str) -> bool:
     return hasattr(_db, name) and callable(getattr(_db, name))
@@ -322,17 +344,42 @@ async def run(req: RunRequest):
 
 # ======================= Run from PRESS plan =======================
 
+class SearchDepth(str, Enum):
+    QUICK = "quick"
+    STANDARD = "standard"
+    COMPREHENSIVE = "comprehensive"
+
+
 class RunWithPressBody(BaseModel):
     """Request model for executing workflow with a pre-generated PRESS plan."""
     plan: PressPlanResponse
     sources: Optional[List[str]] = None
     thread_id: Optional[str] = None
+    search_mode: Optional[SearchDepth] = None
+    max_results_per_source: Optional[int] = None
+
+    @field_validator("search_mode", mode="before")
+    @classmethod
+    def _normalize_search_mode(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, SearchDepth):
+            return value
+        if isinstance(value, str):
+            value_norm = value.strip().lower()
+            try:
+                return SearchDepth(value_norm)
+            except ValueError as exc:
+                raise ValueError(f"Unsupported search_mode '{value}'") from exc
+        raise TypeError("search_mode must be a string or SearchDepth enum value")
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
                     "sources": ["PubMed", "Crossref", "ERIC", "SemanticScholar"],
+                    "search_mode": "Standard",
+                    "max_results_per_source": 25,
                     "plan": {
                         "question_lico": {
                             "learner": "healthcare students",
@@ -425,6 +472,53 @@ async def run_with_press(body: RunWithPressBody):
         tid = body.thread_id or str(uuid4())
         plan = body.plan
         logger.info(f"run_with_press: processing plan with {len(plan.strategies) if hasattr(plan, 'strategies') else 'unknown'} strategies")
+
+        config = get_config()
+        search_cfg = getattr(config, "search", None)
+        modes = (getattr(search_cfg, "modes", {}) or {}) if search_cfg else {}
+        requested_mode = body.search_mode.value if body.search_mode else None
+        resolved_mode = requested_mode
+
+        max_results = body.max_results_per_source
+        if max_results is None and resolved_mode:
+            max_results = modes.get(resolved_mode)
+
+        if max_results is None and search_cfg:
+            max_results = search_cfg.max_results_per_source
+
+        if max_results is None and modes.get("standard") is not None:
+            resolved_mode = resolved_mode or "standard"
+            max_results = modes["standard"]
+
+        fallback_default = modes.get("standard") or (search_cfg.max_results_per_source if search_cfg else None)
+        if fallback_default is None:
+            fallback_default = 25
+        try:
+            fallback_default = int(fallback_default)
+        except Exception:
+            fallback_default = 25
+        if fallback_default <= 0:
+            fallback_default = 25
+
+        try:
+            max_results_int = int(max_results)
+            if max_results_int <= 0:
+                raise ValueError
+        except Exception:
+            max_results_int = fallback_default
+
+        if resolved_mode is None:
+            for mode_name, value in modes.items():
+                if value == max_results_int:
+                    resolved_mode = mode_name
+                    break
+
+        logger.info(
+            "run_with_press: resolved search_mode=%s max_results_per_source=%d",
+            resolved_mode or "unspecified",
+            max_results_int,
+        )
+
         # Pull MEDLINE/PubMed strategy
         strat = plan.strategies.get("MEDLINE") if isinstance(plan.strategies, dict) else None
         if strat is None:
@@ -460,7 +554,13 @@ async def run_with_press(body: RunWithPressBody):
             years=years_final,
         )
 
-        init_state = {"query": generic_q, "press": press_snapshot}
+        init_state = {
+            "query": generic_q,
+            "press": press_snapshot,
+            "max_results_per_source": max_results_int,
+        }
+        if resolved_mode:
+            init_state["search_mode"] = resolved_mode
         logger.info(f"run_with_press: starting graph execution with query: {generic_q[:100]}...")
         logger.info(f"run_with_press: thread_id={tid}, sources={srcs}")
         
@@ -492,6 +592,8 @@ async def run_with_press(body: RunWithPressBody):
             "query_generic": generic_q,
             "query_pubmed": pubmed_q,
             "years": years_final,
+            "search_mode": resolved_mode.capitalize() if resolved_mode else None,
+            "max_results_per_source": max_results_int,
         }
     except HTTPException:
         raise
@@ -675,7 +777,7 @@ async def export_appraisals_csv(run_id: str):
 
 JOIN_COLS = [
     "record_id", "title", "abstract", "authors", "year", "doi", "url", "source",
-    "publication_type", "institution", "rating", "score_final", "rationale", "run_id"
+    "publication_type", "institution", "rating", "score_final", "rationale", "full_text_used", "run_id"
 ]
 
 @app.get(
@@ -707,7 +809,7 @@ async def export_records_with_appraisals_json(run_id: str):
         Appraisal.record_id == Record.id,
     )
     rows = await _select_mappings(stmt)
-    return rows
+    return _annotate_full_text_usage(run_id, rows)
 
 @app.get("/runs/{run_id}/records_with_appraisals.csv")
 async def export_records_with_appraisals_csv(run_id: str):
@@ -731,7 +833,7 @@ async def export_records_with_appraisals_csv(run_id: str):
         Appraisal.run_id == run_id,
         Appraisal.record_id == Record.id,
     )
-    rows = await _select_mappings(stmt)
+    rows = _annotate_full_text_usage(run_id, await _select_mappings(stmt))
     csv_body = _mappings_to_csv(rows, JOIN_COLS)
     return Response(
         content=csv_body,
@@ -914,7 +1016,7 @@ async def export_records_with_appraisals_page(
 
     # Count
     total = await _count_stmt(stmt)
-    rows = await _select_mappings(stmt.offset(offset).limit(limit))
+    rows = _annotate_full_text_usage(run_id, await _select_mappings(stmt.offset(offset).limit(limit)))
     return {"run_id": run_id, "total": total, "limit": limit, "offset": offset, "items": rows}
 
 # ======================= Screenings + Records export ==========================
@@ -2062,13 +2164,30 @@ def generate_research_synthesis(run_id: str, request: ResearchSynthesisRequest):
         # Extract study findings with full-text retrieval
         findings = extract_study_findings_sync(records_data, retrieve_fulltext=request.include_fulltext)
 
+        # Track which studies contributed full text
+        fulltext_usage: Dict[str, bool] = {}
+        for record, finding in zip(records_data, findings):
+            record_id = record.get("record_id")
+            used_full_text = bool(
+                finding.full_text_content is not None and getattr(finding.full_text_content, "extraction_success", False)
+            )
+            record["full_text_used"] = used_full_text
+            if record_id:
+                fulltext_usage[record_id] = used_full_text
+
+        # Cache per-run usage for downstream exports
+        FULLTEXT_USAGE_CACHE[run_id] = fulltext_usage
         # Generate comprehensive synthesis
         synthesis = synthesize_research_sync(
             findings=findings,
             original_question=research_question,
             lico_components=request.lico_components
         )
-        
+
+        # Ensure response exposes record-based availability
+        if hasattr(synthesis, "full_text_availability"):
+            synthesis.full_text_availability = fulltext_usage
+
         logger.info(f"Research synthesis completed for run {run_id}")
         return synthesis
         

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { ApiClient } from '../services/apiClient'
 import type { CitationMetadata } from '../services/apiClient'
 import { DetailedAppraisalView } from './DetailedAppraisalView'
@@ -159,6 +159,7 @@ interface RecordWithAppraisal {
   appraisal_color?: 'Red' | 'Amber' | 'Green'
   appraisal_reasoning?: string
   ai_review_type?: 'full_text' | 'abstract_only'
+  full_text_used?: boolean
   status?: 'Include' | 'Exclude'  // For display purposes
   // Enhanced appraisal data
   detailed_appraisals?: DetailedAppraisal[]
@@ -494,6 +495,8 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
     const screeningReasonPool = screeningReasons[screeningDecision]
     const screeningReason = screeningReasonPool[Math.floor(Math.random() * screeningReasonPool.length)]
     
+    const fullTextUsed = Math.random() > 0.3
+
     const generatedRecord = {
       id: `record-${index}`,
       title: paper.title || `Study Title ${index + 1}`,
@@ -510,7 +513,8 @@ function generateEnhancedMockRecords(ratings: string[]): RecordWithAppraisal[] {
                       rating === 'Amber' ? Math.random() * 0.3 + 0.5 : 
                       Math.random() * 0.3 + 0.2,
       appraisal_reasoning: reasoning,
-      ai_review_type: Math.random() > 0.3 ? 'full_text' : 'abstract_only',
+      full_text_used: fullTextUsed,
+      ai_review_type: fullTextUsed ? 'full_text' : 'abstract_only',
       screening_decision: screeningDecision,
       screening_reason: screeningReason,
       screening_ai_explanation: `Initial AI assessment: ${screeningDecision === 'include' ? 'Study meets inclusion criteria' : 'Study does not meet inclusion criteria'}` // Default explanation
@@ -587,6 +591,16 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
   const [showDetailedAppraisal, setShowDetailedAppraisal] = useState<boolean>(false)
   const [selectedRecordForDetail, setSelectedRecordForDetail] = useState<RecordWithAppraisal | null>(null)
 
+  const recordLookup = useMemo(() => {
+    const map: Record<string, RecordWithAppraisal> = {}
+    records.forEach(record => {
+      if (record.id) {
+        map[record.id] = record
+      }
+    })
+    return map
+  }, [records])
+
   // View layout state
   const [compactView, setCompactView] = useState<boolean>(false)
 
@@ -648,7 +662,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
 
       // Full text filter
       if (hasFullTextFilter !== 'all') {
-        const hasFullText = record.ai_review_type === 'full_text'
+        const hasFullText = record.full_text_used === true
         if (hasFullTextFilter === 'yes' && !hasFullText) return false
         if (hasFullTextFilter === 'no' && hasFullText) return false
       }
@@ -706,7 +720,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
           'Appropriate statistical analysis with effect sizes reported'
         ],
         confidence: 0.85,
-        used_full_text: record.ai_review_type === 'full_text',
+        used_full_text: record.full_text_used === true,
         sections_analyzed: ['abstract', 'methods', 'results', 'discussion'],
         assessed_by: 'AI Assessment System',
         assessment_time: 12.5,
@@ -794,7 +808,8 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                   appraisal_score: apiRecord.score_final || 0,
                   appraisal_color: apiRecord.rating as 'Red' | 'Amber' | 'Green', // Map rating field to appraisal_color
                   appraisal_reasoning: apiRecord.rationale,
-                  ai_review_type: apiRecord.content_type || ((apiRecord.pdf_url || apiRecord.fulltext_url || apiRecord.open_access) ? 'full_text' : 'abstract_only')
+                  full_text_used: apiRecord.full_text_used ?? false,
+                  ai_review_type: (apiRecord.full_text_used ?? false) ? 'full_text' : 'abstract_only'
                 }))
                 
                 console.log('Mapped records count:', mappedRecords.length)
@@ -918,6 +933,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                 appraisal_score: appraisal?.score_final || 0,
                 appraisal_color: appraisal?.rating as 'Red' | 'Amber' | 'Green',
                 appraisal_reasoning: appraisal?.rationale,
+                full_text_used: false,
                 ai_review_type: 'abstract_only',
                 status: isIncluded ? 'Include' : 'Exclude'
               }
@@ -1162,8 +1178,8 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
     if (sortedRecords.length === 0) return
     
     const headers = [
-      'Title', 'Authors', 'Year', 'Source', 'Publication Type', 
-      'Appraisal Color', 'Appraisal Score', 'AI Review Type',
+      'Title', 'Authors', 'Year', 'Source', 'Publication Type',
+      'Appraisal Color', 'Appraisal Score', 'Full Text Used',
       'DOI', 'URL', 'Screening Decision', 'Screening Reason',
       'AI Explanation', 'Abstract'
     ]
@@ -1178,7 +1194,7 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
         inferPublicationType(record.title, record.publication_type),
         record.appraisal_color || '',
         record.appraisal_score?.toFixed(2) || '',
-        record.ai_review_type || '',
+        record.full_text_used ? 'Full text analyzed' : 'Abstract only',
         record.doi || '',
         record.url || '',
         record.screening_decision || '',
@@ -1406,8 +1422,8 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
 
           {/* Full-Text Acquisition Breakdown */}
           {sortedRecords.length > 0 && (() => {
-            const fullTextCount = sortedRecords.filter(r => r.ai_review_type === 'full_text').length
-            const abstractOnlyCount = sortedRecords.filter(r => r.ai_review_type === 'abstract_only').length
+            const fullTextCount = sortedRecords.filter(r => r.full_text_used === true).length
+            const abstractOnlyCount = sortedRecords.filter(r => r.full_text_used !== true).length
             const totalCount = sortedRecords.length
 
             return (
@@ -1536,9 +1552,12 @@ export function RunResults({ runId, runData, apiClient }: RunResultsProps) {
                           </span>
                         )}
                         
-                        {record.ai_review_type && record.status === 'Include' && (
-                          <span className={`review-type-badge ${record.ai_review_type === 'full_text' ? 'full-text' : 'abstract-only'}`}>
-                            {record.ai_review_type === 'full_text' ? '📄 Full Text' : '📋 Abstract Only'}
+                        {record.status === 'Include' && (
+                          <span
+                            className={`review-type-badge ${record.full_text_used ? 'full-text' : 'abstract-only'}`}
+                            title={record.full_text_used ? 'Full text analyzed' : 'Abstract only'}
+                          >
+                            {record.full_text_used ? '📄 Full text analyzed' : '📋 Abstract only'}
                           </span>
                         )}
 

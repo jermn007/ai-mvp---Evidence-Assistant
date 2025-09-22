@@ -15,3 +15,5 @@ class AgentState(TypedDict, total=False):
     seen_external_ids: List[str]          # thread-level memory
     source_counts: Dict[str, int]         # <-- NEW
     timings: Dict[str, float]             # <-- NEW (seconds)
+    max_results_per_source: int
+    search_mode: str

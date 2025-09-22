@@ -86,7 +86,7 @@ export interface ResearchSynthesis {
   methodological_quality: string
   future_research_directions: string[]
   supporting_evidence: EvidenceSupport[]
-  full_text_availability: Record<string, boolean>
+  full_text_availability: Record<string, boolean> // Keyed by record_id
   study_citations: Record<string, CitationMetadata>
 }
 
@@ -600,13 +600,32 @@ export class ApiClient {
   }
 
   // Runs and Results
-  async runWithPlan(plan: PressPlan, sources?: string[]): Promise<any> {
+  async runWithPlan(
+    plan: PressPlan,
+    options?: {
+      sources?: string[]
+      searchMode?: 'quick' | 'standard' | 'comprehensive'
+      maxResultsPerSource?: number
+    }
+  ): Promise<any> {
+    const payload: Record<string, any> = {
+      plan,
+      sources: options?.sources || ['PubMed', 'Crossref', 'ERIC', 'SemanticScholar', 'GoogleScholar', 'arXiv']
+    }
+
+    if (options?.searchMode) {
+      const normalized = options.searchMode.toString().toLowerCase()
+      const label = normalized.charAt(0).toUpperCase() + normalized.slice(1)
+      payload.search_mode = label
+    }
+
+    if (typeof options?.maxResultsPerSource === 'number') {
+      payload.max_results_per_source = options.maxResultsPerSource
+    }
+
     return this.request('/run/press', {
       method: 'POST',
-      body: JSON.stringify({
-        plan,
-        sources: sources || ['PubMed', 'Crossref', 'ERIC', 'SemanticScholar', 'GoogleScholar', 'arXiv']
-      })
+      body: JSON.stringify(payload)
     })
   }
 
