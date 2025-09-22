@@ -20,6 +20,7 @@ from rapidfuzz import fuzz
 from app.models import (
     PressPlan, RecordModel, ScreeningModel, AppraisalModel, PrismaCountsModel
 )
+from app.config import get_config
 from app.rubric import Rubric
 from app.ai_service import get_ai_service
 from app.publication_classifier import batch_classify_publications_sync as batch_classify_publications
@@ -115,6 +116,44 @@ def harvest(state):
     q = strip_or_empty(state.get("query") or "instructional design evidence synthesis")
     mailto = os.getenv("CROSSREF_MAILTO")
 
+    config = get_config()
+    search_cfg = getattr(config, "search", None)
+    modes = (getattr(search_cfg, "modes", {}) or {}) if search_cfg else {}
+
+    requested_mode = strip_or_empty(state.get("search_mode") or "").lower() or None
+    max_results = state.get("max_results_per_source")
+    if max_results is None and requested_mode:
+        max_results = modes.get(requested_mode)
+
+    if max_results is None and search_cfg:
+        # fall back to configured default
+        max_results = search_cfg.max_results_per_source
+
+    try:
+        max_results_int = int(max_results)
+        if max_results_int <= 0:
+            raise ValueError
+    except Exception:
+        fallback = search_cfg.max_results_per_source if search_cfg else 25
+        max_results_int = fallback if fallback and fallback > 0 else 25
+
+    # persist resolved values back onto state for downstream nodes / observability
+    state["max_results_per_source"] = max_results_int
+    if requested_mode:
+        state["search_mode"] = requested_mode
+    elif modes:
+        for mode_name, value in modes.items():
+            if value == max_results_int:
+                state["search_mode"] = mode_name
+                break
+
+    resolved_mode_name = state.get("search_mode") or requested_mode
+    logger.info(
+        "harvest: using max_results_per_source=%d (mode=%s)",
+        max_results_int,
+        resolved_mode_name or "unspecified",
+    )
+
     # PRESS year filter like "2019-"
     year_min = None
     years = state["press"].years if state.get("press") else None
@@ -139,12 +178,12 @@ def harvest(state):
         if not wanted or name in wanted:
             coros.append(coro)
 
-    add("PubMed", pubmed_search_async(q, max_n=25))
-    add("Crossref", crossref_search_async(q, max_n=25, mailto=mailto))
-    add("arXiv", arxiv_search_async(q, max_n=25))
-    add("ERIC", eric_search_async(q, max_n=25))
-    add("SemanticScholar", s2_search_async(q, max_n=25))
-    add("GoogleScholar", scholar_serpapi_async(q, max_n=25, year_min=year_min))  # pass year floor
+    add("PubMed", pubmed_search_async(q, max_n=max_results_int))
+    add("Crossref", crossref_search_async(q, max_n=max_results_int, mailto=mailto))
+    add("arXiv", arxiv_search_async(q, max_n=max_results_int))
+    add("ERIC", eric_search_async(q, max_n=max_results_int))
+    add("SemanticScholar", s2_search_async(q, max_n=max_results_int))
+    add("GoogleScholar", scholar_serpapi_async(q, max_n=max_results_int, year_min=year_min))  # pass year floor
 
     async def gather():
         return await asyncio.gather(*coros, return_exceptions=True)

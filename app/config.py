@@ -32,6 +32,7 @@ class SearchConfig:
     request_timeout: int = 30
     requests_per_second: int = 5
     burst_size: int = 10
+    modes: Dict[str, int] | None = None
 
 @dataclass
 class ScreeningConfig:
@@ -156,11 +157,23 @@ class ConfigLoader:
         # Search config
         search_data = yaml_data.get("search", {})
         rate_limit = search_data.get("rate_limit", {})
+        modes_raw = search_data.get("modes", {}) or {}
+        modes = {}
+        for key, value in modes_raw.items():
+            try:
+                key_norm = str(key).strip().lower()
+                value_int = int(value)
+                if value_int > 0:
+                    modes[key_norm] = value_int
+            except Exception:
+                continue
+
         search = SearchConfig(
             max_results_per_source=search_data.get("max_results_per_source", 25),
             request_timeout=search_data.get("request_timeout", 30),
             requests_per_second=rate_limit.get("requests_per_second", 5),
-            burst_size=rate_limit.get("burst_size", 10)
+            burst_size=rate_limit.get("burst_size", 10),
+            modes=modes or None
         )
         
         # Screening config
@@ -226,7 +239,13 @@ class ConfigLoader:
                 core_fields=self._get_default_core_fields(),
                 extended_fields=self._get_default_extended_fields()
             ),
-            search=SearchConfig(),
+            search=SearchConfig(
+                modes={
+                    "quick": 10,
+                    "standard": 25,
+                    "comprehensive": 75,
+                }
+            ),
             screening=ScreeningConfig(),
             appraisal=AppraisalConfig(),
             llm=LLMConfig()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import logging
+from enum import Enum
 # DEBUG: Force reload to pick up persist.py changes
 from uuid import uuid4
 import asyncio
@@ -17,7 +18,7 @@ from types import SimpleNamespace as _NS
 from fastapi import FastAPI, HTTPException, Response, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select, or_, func, cast, case
 from sqlalchemy.types import Float as SA_Float
 from app.utils.strings import strip_or_empty, norm_lower
@@ -38,6 +39,7 @@ from app.sources import (
     scholar_serpapi_async,
 )
 from app.graph.build import get_graph, CHECKPOINTER
+from app.config import get_config
 from app.persist import persist_run
 from app.models import PressPlan
 
@@ -322,17 +324,42 @@ async def run(req: RunRequest):
 
 # ======================= Run from PRESS plan =======================
 
+class SearchDepth(str, Enum):
+    QUICK = "quick"
+    STANDARD = "standard"
+    COMPREHENSIVE = "comprehensive"
+
+
 class RunWithPressBody(BaseModel):
     """Request model for executing workflow with a pre-generated PRESS plan."""
     plan: PressPlanResponse
     sources: Optional[List[str]] = None
     thread_id: Optional[str] = None
+    search_mode: Optional[SearchDepth] = None
+    max_results_per_source: Optional[int] = None
+
+    @field_validator("search_mode", mode="before")
+    @classmethod
+    def _normalize_search_mode(cls, value):
+        if value is None:
+            return value
+        if isinstance(value, SearchDepth):
+            return value
+        if isinstance(value, str):
+            value_norm = value.strip().lower()
+            try:
+                return SearchDepth(value_norm)
+            except ValueError as exc:
+                raise ValueError(f"Unsupported search_mode '{value}'") from exc
+        raise TypeError("search_mode must be a string or SearchDepth enum value")
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
                     "sources": ["PubMed", "Crossref", "ERIC", "SemanticScholar"],
+                    "search_mode": "Standard",
+                    "max_results_per_source": 25,
                     "plan": {
                         "question_lico": {
                             "learner": "healthcare students",
@@ -425,6 +452,53 @@ async def run_with_press(body: RunWithPressBody):
         tid = body.thread_id or str(uuid4())
         plan = body.plan
         logger.info(f"run_with_press: processing plan with {len(plan.strategies) if hasattr(plan, 'strategies') else 'unknown'} strategies")
+
+        config = get_config()
+        search_cfg = getattr(config, "search", None)
+        modes = (getattr(search_cfg, "modes", {}) or {}) if search_cfg else {}
+        requested_mode = body.search_mode.value if body.search_mode else None
+        resolved_mode = requested_mode
+
+        max_results = body.max_results_per_source
+        if max_results is None and resolved_mode:
+            max_results = modes.get(resolved_mode)
+
+        if max_results is None and search_cfg:
+            max_results = search_cfg.max_results_per_source
+
+        if max_results is None and modes.get("standard") is not None:
+            resolved_mode = resolved_mode or "standard"
+            max_results = modes["standard"]
+
+        fallback_default = modes.get("standard") or (search_cfg.max_results_per_source if search_cfg else None)
+        if fallback_default is None:
+            fallback_default = 25
+        try:
+            fallback_default = int(fallback_default)
+        except Exception:
+            fallback_default = 25
+        if fallback_default <= 0:
+            fallback_default = 25
+
+        try:
+            max_results_int = int(max_results)
+            if max_results_int <= 0:
+                raise ValueError
+        except Exception:
+            max_results_int = fallback_default
+
+        if resolved_mode is None:
+            for mode_name, value in modes.items():
+                if value == max_results_int:
+                    resolved_mode = mode_name
+                    break
+
+        logger.info(
+            "run_with_press: resolved search_mode=%s max_results_per_source=%d",
+            resolved_mode or "unspecified",
+            max_results_int,
+        )
+
         # Pull MEDLINE/PubMed strategy
         strat = plan.strategies.get("MEDLINE") if isinstance(plan.strategies, dict) else None
         if strat is None:
@@ -460,7 +534,13 @@ async def run_with_press(body: RunWithPressBody):
             years=years_final,
         )
 
-        init_state = {"query": generic_q, "press": press_snapshot}
+        init_state = {
+            "query": generic_q,
+            "press": press_snapshot,
+            "max_results_per_source": max_results_int,
+        }
+        if resolved_mode:
+            init_state["search_mode"] = resolved_mode
         logger.info(f"run_with_press: starting graph execution with query: {generic_q[:100]}...")
         logger.info(f"run_with_press: thread_id={tid}, sources={srcs}")
         
@@ -492,6 +572,8 @@ async def run_with_press(body: RunWithPressBody):
             "query_generic": generic_q,
             "query_pubmed": pubmed_q,
             "years": years_final,
+            "search_mode": resolved_mode.capitalize() if resolved_mode else None,
+            "max_results_per_source": max_results_int,
         }
     except HTTPException:
         raise

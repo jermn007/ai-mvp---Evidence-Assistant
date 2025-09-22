@@ -13,6 +13,14 @@ interface PressPlannerProps {
   onRunComplete?: (runId: string, runData?: any) => void
 }
 
+type SearchMode = 'quick' | 'standard' | 'comprehensive'
+
+const SEARCH_MODE_LABELS: Record<SearchMode, string> = {
+  quick: 'Quick — Fast scan (top 10 per source)',
+  standard: 'Standard — Balanced (top 25 per source)',
+  comprehensive: 'Comprehensive — Deep dive (top 75 per source)'
+}
+
 export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPlannerProps) {
   const [lico, setLico] = useState<LICO>({
     learner: '',
@@ -37,6 +45,7 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
   // State for run execution
   const [runResult, setRunResult] = useState<any>(null)
   const [isRunning, setIsRunning] = useState<boolean>(false)
+  const [searchMode, setSearchMode] = useState<SearchMode>('standard')
 
   // Cleanup effect to cancel pending requests
   useEffect(() => {
@@ -193,10 +202,11 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
     setError('')
 
     try {
-      const result = await apiClient.runWithPlan(pressPlan!)
+      const result = await apiClient.runWithPlan(pressPlan!, { searchMode })
       console.log('Run execution started:', result)
       setRunResult(result)
-      setError(`✅ Literature review started successfully! Run ID: ${result.run_id}`)
+      const modeLabel = searchMode.charAt(0).toUpperCase() + searchMode.slice(1)
+      setError(`✅ Literature review started successfully! Run ID: ${result.run_id} • Mode: ${modeLabel}`)
 
       // Notify parent component about the completed run
       if (onRunComplete && result.run_id) {
@@ -208,7 +218,7 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
     } finally {
       setIsRunning(false)
     }
-  }, [apiClient, pressPlan, validationState.canRunWorkflow, onRunComplete])
+  }, [apiClient, pressPlan, validationState.canRunWorkflow, onRunComplete, searchMode])
 
   return (
     <div className="press-planner">
@@ -337,6 +347,26 @@ export function PressPlanner({ apiClient, aiAvailable, onRunComplete }: PressPla
             <div className="card">
               <h3>🚀 Execute Literature Review</h3>
               <p>Run the complete systematic review workflow with your PRESS plan</p>
+              <div className="config-group">
+                <label htmlFor="search-mode">Search depth preset:</label>
+                <select
+                  id="search-mode"
+                  value={searchMode}
+                  onChange={(event) => setSearchMode(event.target.value as SearchMode)}
+                  disabled={isRunning || loading}
+                >
+                  {(Object.keys(SEARCH_MODE_LABELS) as SearchMode[]).map(mode => (
+                    <option key={mode} value={mode}>
+                      {SEARCH_MODE_LABELS[mode]}
+                    </option>
+                  ))}
+                </select>
+                <p className="run-mode-hint">
+                  {searchMode === 'quick' && 'Fast reconnaissance sweep — great for early signal checking.'}
+                  {searchMode === 'standard' && 'Balanced coverage mirroring the default 25 results per source.'}
+                  {searchMode === 'comprehensive' && 'Maximum recall — expect longer runs with richer exports.'}
+                </p>
+              </div>
               <button
                 className="build-plan-btn run-btn"
                 onClick={handleRunWithPlan}
