@@ -245,6 +245,32 @@ For issues and feature requests, please check:
 - [GitHub Issues](https://github.com/jermn007/ai-mvp---Evidence-Assistant/issues)
 - [CLAUDE.md](./CLAUDE.md) for development guidance
 
+## Known Issues & Limitations
+
+### Search Sources
+
+- **Silent source skipping** — If an API key is missing or a source returns an error, that source is silently excluded from results rather than raising an error. If your result counts seem low, check that all keys in `.env` are set and valid.
+- **Results capped at 25 per source** — The default `max_results_per_source` is 25. Change this in `config.yaml` under `search.modes` for more comprehensive sweeps (note: higher limits increase runtime significantly).
+- **Semantic Scholar rate limits** — Without an `S2_API_KEY`, anonymous requests are heavily rate-limited. Set the key for reliable access.
+
+### Deduplication
+
+- **Title-only deduplication** — By default, deduplication uses title fuzzy-matching (96% threshold) and exact DOI/ID matching only. Abstract and author similarity checks are available in `config.yaml` but disabled by default, so papers with different titles but identical content may slip through.
+
+### Database
+
+- **SQLite schema migrations** — The app includes a runtime compatibility shim that patches missing columns on startup. If you encounter `table X has no column named Y` errors on an existing database, run `alembic upgrade head` (back up `app.db` first).
+- **PostgreSQL checkpointer warning** — When running with SQLite, you may see a noisy `PostgresSaver` initialization warning in the logs. This is harmless and does not affect functionality.
+
+### Optional Dependencies
+
+- **PDF text extraction disabled without PyPDF2** — Full-text retrieval from PDFs requires `PyPDF2`. If it is not installed, PDF processing is silently skipped. Install it with `pip install PyPDF2`.
+- **Retry logic disabled without tenacity** — LLM call retries require the `tenacity` package. All packages are included in `requirements.txt`; this only affects custom installs that skip the full requirements.
+
+### LangChain Warnings
+
+- **Deprecation warnings** — LangChain versions ship with numerous deprecation warnings. These are suppressed in tests but may appear at runtime. They do not affect functionality with the current pinned versions in `requirements.txt`.
+
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
