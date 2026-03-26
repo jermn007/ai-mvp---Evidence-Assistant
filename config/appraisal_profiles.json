@@ -1,0 +1,196 @@
+{
+  "comprehensive": {
+    "name": "Comprehensive Multi-Method Assessment",
+    "description": "Complete assessment using all available methodologies for thorough evidence evaluation",
+    "methodologies": [
+      {
+        "methodology_type": "rag_quality",
+        "enabled": true,
+        "weight": 0.4,
+        "name": "RAG Quality Indices",
+        "description": "Traditional quality assessment with recency, design strength, and bias evaluation",
+        "version": "2.0",
+        "applicable_domains": ["medical", "education", "general"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      },
+      {
+        "methodology_type": "kirkpatrick",
+        "enabled": true,
+        "weight": 0.3,
+        "name": "Kirkpatrick's Levels",
+        "description": "Four-level evaluation model for training and educational effectiveness",
+        "version": "1.0",
+        "applicable_domains": ["education", "medical", "training"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      },
+      {
+        "methodology_type": "towle",
+        "enabled": true,
+        "weight": 0.2,
+        "name": "Towle's Patient Involvement",
+        "description": "Six-level framework for evaluating patient engagement in medical education",
+        "version": "1.0",
+        "applicable_domains": ["medical", "healthcare"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      },
+      {
+        "methodology_type": "strength_conclusion",
+        "enabled": true,
+        "weight": 0.1,
+        "name": "Results & Strength Assessment",
+        "description": "Assessment of results strength and conclusion validity",
+        "version": "1.0",
+        "applicable_domains": ["medical", "education", "general"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      }
+    ],
+    "combination_strategy": "weighted_average",
+    "minimum_confidence": 0.5,
+    "created_by": "system",
+    "domain_specific": null
+  },
+  "medical_education": {
+    "name": "Medical Education Focused",
+    "description": "Specialized assessment for medical education studies emphasizing Kirkpatrick levels and patient involvement",
+    "methodologies": [
+      {
+        "methodology_type": "kirkpatrick",
+        "enabled": true,
+        "weight": 0.5,
+        "name": "Kirkpatrick's Levels",
+        "description": "Four-level evaluation model for training and educational effectiveness",
+        "version": "1.0",
+        "applicable_domains": ["education", "medical", "training"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      },
+      {
+        "methodology_type": "towle",
+        "enabled": true,
+        "weight": 0.3,
+        "name": "Towle's Patient Involvement",
+        "description": "Six-level framework for evaluating patient engagement in medical education",
+        "version": "1.0",
+        "applicable_domains": ["medical", "healthcare"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      },
+      {
+        "methodology_type": "rag_quality",
+        "enabled": true,
+        "weight": 0.2,
+        "name": "RAG Quality Indices",
+        "description": "Traditional quality assessment with recency, design strength, and bias evaluation",
+        "version": "2.0",
+        "applicable_domains": ["medical", "education", "general"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      }
+    ],
+    "combination_strategy": "weighted_average",
+    "minimum_confidence": 0.6,
+    "created_by": "system",
+    "domain_specific": "medical"
+  },
+  "general_education": {
+    "name": "General Education Research",
+    "description": "Assessment profile optimized for general educational research studies",
+    "methodologies": [
+      {
+        "methodology_type": "kirkpatrick",
+        "enabled": true,
+        "weight": 0.6,
+        "name": "Kirkpatrick's Levels",
+        "description": "Four-level evaluation model for training and educational effectiveness",
+        "version": "1.0",
+        "applicable_domains": ["education", "medical", "training"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      },
+      {
+        "methodology_type": "rag_quality",
+        "enabled": true,
+        "weight": 0.3,
+        "name": "RAG Quality Indices",
+        "description": "Traditional quality assessment with recency, design strength, and bias evaluation",
+        "version": "2.0",
+        "applicable_domains": ["medical", "education", "general"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      },
+      {
+        "methodology_type": "strength_conclusion",
+        "enabled": true,
+        "weight": 0.1,
+        "name": "Results & Strength Assessment",
+        "description": "Assessment of results strength and conclusion validity",
+        "version": "1.0",
+        "applicable_domains": ["medical", "education", "general"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      }
+    ],
+    "combination_strategy": "weighted_average",
+    "minimum_confidence": 0.5,
+    "created_by": "system",
+    "domain_specific": "education"
+  },
+  "traditional": {
+    "name": "Traditional RAG Quality Only",
+    "description": "Single-method assessment using only RAG Quality Indices for backward compatibility",
+    "methodologies": [
+      {
+        "methodology_type": "rag_quality",
+        "enabled": true,
+        "weight": 1.0,
+        "name": "RAG Quality Indices",
+        "description": "Traditional quality assessment with recency, design strength, and bias evaluation",
+        "version": "2.0",
+        "applicable_domains": ["medical", "education", "general"],
+        "required_content": ["abstract"],
+        "parameters": {
+          "use_ai": true,
+          "model_name": "gpt-4o-mini"
+        }
+      }
+    ],
+    "combination_strategy": "weighted_average",
+    "minimum_confidence": 0.5,
+    "created_by": "system",
+    "domain_specific": null
+  }
+}

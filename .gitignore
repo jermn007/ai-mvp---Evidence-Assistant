@@ -1,0 +1,71 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+
+# Database files
+*.db
+*.sqlite
+*.db-shm
+*.db-wal
+
+# Exported / test data
+records.csv
+gold.csv
+prisma_summary_.csv
+
+# Test execution artifacts
+tests/api_test_results.json
+tests/playwright_api_test_results.json
+tests/workflow_integration_test_results.json
+tests/E2E_EXECUTION_RESULTS.md
+tests/E2E_COMPREHENSIVE_SUMMARY.md
+tests/E2E_TEST_SUMMARY.md
+
+# Internal development documentation
+HANDOFF_SUMMARY.md
+IMPROVEMENTS_SUMMARY.md
+MCP_IMPLEMENTATION_PLAN.md
+MULTI_METHOD_TROUBLESHOOTING.md
+TECHNICAL_OVERVIEW.md
+docs/evidence_assistant_mvp_build_report_handoff_*.md
+
+# Copyrighted third-party content
+"docs/Generative AI with LangChain*.md"
+"docs/Generative AI with LangChain*.pdf"
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Nested repo / stray directories
+EvidenceAssistant/
+scripts/
+
+# Junk / temp files
+=23.0.0
+**/New Text Document.txt
+NextSteps1.txt
+ReadMe.txt
+tmp_*.txt
+*.crdownload
+__patch_temp.py
+__tmp_test_script.py
+
+# One-off scripts and scratch files
+add_progress_columns.py
+analyze_abstracts.py
+appgraphnodes.py
+check_appraisals.py
+test_e2e_evaluation.py
+
+# Internal docs (root-level handoffs and troubleshooting)
+TROUBLESHOOTING_ASYNC_WORKFLOW.md
+evidence_assistant_mvp_build_report_handoff_*.md
+
+# Duplicate / local-only app files
+app/requirements.txt
+app/rubric.yaml
+app/NextSteps1.txt
