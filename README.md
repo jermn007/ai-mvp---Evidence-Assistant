@@ -1,5 +1,8 @@
 # AI MVP - Evidence Assistant
 
+> **⚠️ Work in Progress / Proof of Concept**
+> This project is an early-stage MVP intended to demonstrate the feasibility of automated systematic literature reviews. It is under active development, not production-ready, and APIs, schemas, and behavior may change without notice. Use at your own risk for exploratory or research purposes only.
+
 An AI-powered systematic literature review application that automates academic research workflows using the PRESS methodology and LICO framework.
 
 ## 🔬 Overview
