@@ -31,11 +31,12 @@ TECHNICAL_OVERVIEW.md
 docs/evidence_assistant_mvp_build_report_handoff_*.md
 
 # Copyrighted third-party content
-"docs/Generative AI with LangChain*.md"
-"docs/Generative AI with LangChain*.pdf"
+docs/Generative AI with LangChain*.md
+docs/Generative AI with LangChain*.pdf
 
-# Claude Code local settings
-.claude/settings.local.json
+# Claude Code (local AI assistant config — not for public repo)
+CLAUDE.md
+.claude/
 
 # Playwright MCP artifacts
 .playwright-mcp/
